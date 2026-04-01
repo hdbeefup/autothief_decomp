@@ -1091,7 +1091,8 @@ class Decompiler:
                     if 0 <= idx < len(stack):
                         parts.append(stack[idx].text)
                 pop_val(count)
-                result = '..'.join(parts)
+                # Use ' .. ' with spaces to avoid ambiguity (e.g. 9..x parses as 9. .x)
+                result = ' .. '.join(parts)
                 push_val(SVal(result, VKind.EXPR), vb_pc)
 
             elif op == Op.MINUS:
@@ -1224,9 +1225,9 @@ class Decompiler:
                     prefix = 'else' if is_elseif else ''
 
                     if jt == 'c':
-                        emit(f'{prefix}if{cond_text} then', semi=False)
+                        emit(f'{prefix}if {cond_text} then', semi=False)
                     else:
-                        emit(f'{prefix}while{cond_text} do', semi=False)
+                        emit(f'{prefix}while {cond_text} do', semi=False)
 
                     level += 1
                     cond_str = ''
