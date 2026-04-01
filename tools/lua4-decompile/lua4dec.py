@@ -629,10 +629,12 @@ class Decompiler:
             nonlocal top, last_local_processed
             for j in range(last_local_processed, len(chunk.locals)):
                 if chunk.locals[j].startpc == vb_pc:
-                    # Push local placeholder onto stack
-                    stack[top] = SVal(chunk.locals[j].name, VKind.NAME,
-                                     local_name=chunk.locals[j].name, is_local=True)
-                    top += 1
+                    if vb_pc == 0:
+                        # Function parameters: push placeholder (no initializing instruction)
+                        stack[top] = SVal(chunk.locals[j].name, VKind.NAME,
+                                         local_name=chunk.locals[j].name, is_local=True)
+                        top += 1
+                    # For non-params, DON'T push - push_val handles it
                     last_local_processed = j + 1
                 elif chunk.locals[j].startpc > vb_pc:
                     break
@@ -731,17 +733,6 @@ class Decompiler:
             # ---- Process instruction ----
 
             if op == Op.END:
-                # Pop locals ending here
-                for j in range(self._count_locals_ending_at(chunk, vb_pc)):
-                    if top > 0:
-                        # Find and remove a local from stack
-                        for k in range(top - 1, -1, -1):
-                            if stack[k].is_local:
-                                for m in range(k, top - 1):
-                                    stack[m] = stack[m + 1]
-                                top -= 1
-                                break
-
                 if top != 0 and self.debug:
                     print(f"Warning: stack not empty at END (top={top})", file=sys.stderr)
                 break
@@ -775,18 +766,6 @@ class Decompiler:
                 # Check for locals starting at this instruction (for multi-return)
                 loc_start_idx = self._find_locals_at(chunk, vb_pc)
                 num_locals_here = self._count_locals_at(chunk, vb_pc)
-
-                # Pop any local placeholders that were pre-pushed for this CALL
-                if loc_start_idx >= 0:
-                    for j in range(num_locals_here):
-                        loc_name = chunk.locals[loc_start_idx + j].name
-                        # Remove placeholder from stack
-                        for k in range(top - 1, -1, -1):
-                            if stack[k].is_local and stack[k].local_name == loc_name and not local_init[loc_start_idx + j]:
-                                for m in range(k, top - 1):
-                                    stack[m] = stack[m + 1]
-                                top -= 1
-                                break
 
                 # Build call expression
                 if func_pos < top:
@@ -1355,15 +1334,8 @@ class Decompiler:
                 emit('end', semi=False)
                 emit_blank()
 
-                # Kill counter vars
-                for _ in range(3):
-                    if top > 0:
-                        for k in range(top - 1, -1, -1):
-                            if stack[k].is_local:
-                                for m in range(k, top - 1):
-                                    stack[m] = stack[m + 1]
-                                top -= 1
-                                break
+                # Kill counter vars (for loop internals)
+                pop_val(min(3, top))
 
             elif op == Op.CLOSURE:
                 func_idx = get_a(ins)

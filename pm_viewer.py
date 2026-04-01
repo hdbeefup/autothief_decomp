@@ -66,16 +66,22 @@ class PMModel:
                     m.normals.append((nx, ny, nz))
 
             # Triangles: tri_count * 44 bytes
+            # UV layout differs by flags:
+            #   flags & 1: UVs as 6 floats at offset 8-31
+            #   !(flags & 1): UVs as 6 unsigned shorts at offset 20-31 (normalized 0-1)
+            use_float_uvs = bool(m.flags & 1)
             for _ in range(tri_count):
                 data = f.read(44)
                 i0, i1, i2 = struct.unpack_from('<HHH', data, 0)
-                u1, v1, u2, v2, u3, v3 = struct.unpack_from('<ffffff', data, 8)
-                nx, ny = struct.unpack_from('<ff', data, 32)
                 mat_idx = data[40]
-                nz_bytes = data[41:44] + b'\x00'
-                nz = struct.unpack('<f', bytes([0]) + data[41:44])[0] if any(data[41:44]) else 0.0
-                # Face normal z is approximate since mat_idx overlaps byte 40
-                m.triangles.append((i0, i1, i2, u1, v1, u2, v2, u3, v3, nx, ny, nz, mat_idx))
+                if use_float_uvs:
+                    u1, v1, u2, v2, u3, v3 = struct.unpack_from('<ffffff', data, 8)
+                else:
+                    su1, sv1, su2, sv2, su3, sv3 = struct.unpack_from('<6H', data, 20)
+                    u1, v1 = su1 / 65535.0, sv1 / 65535.0
+                    u2, v2 = su2 / 65535.0, sv2 / 65535.0
+                    u3, v3 = su3 / 65535.0, sv3 / 65535.0
+                m.triangles.append((i0, i1, i2, u1, v1, u2, v2, u3, v3, 0, 0, 0, mat_idx))
 
             # Optional: extra triangle data (flags bit 2 set)
             if m.flags & 4:
