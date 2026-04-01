@@ -1186,6 +1186,7 @@ class Decompiler:
                         if target_op != Op.JMP:
                             # No else block, add end position
                             end_positions.append(target + 1)  # convert to vb_pc
+                        # else: JMP handler will add end via else tracking
 
                 pop_val(2)
 
@@ -1268,7 +1269,10 @@ class Decompiler:
                         target = pc + 1 + get_s(ins)
                         end_positions.append(target + 1)
                     else:
-                        level += 1  # restore level, no else needed
+                        # No else needed, but still need end for this if block
+                        target = pc + 1 + get_s(ins)
+                        end_positions.append(target + 1)
+                        level += 1  # restore level
 
                 elif jt == 'w':
                     emit('end', semi=False)
@@ -1311,7 +1315,15 @@ class Decompiler:
                         step_text = f', {step_val}'
 
                     emit(f'for {var_name}={start_val}, {end_val}{step_text} do', semi=False)
-                    pop_val(3)
+                    # DON'T pop: VM keeps start/limit/step on stack as loop state
+                    # Push loop variable placeholder (4th slot used by for-loop)
+                    stack[top] = SVal(var_name, VKind.NAME, local_name=var_name, is_local=True)
+                    top += 1
+                    # Mark for-loop locals as initialized so push_val doesn't grab them
+                    if loc_idx >= 0:
+                        for j in range(self._count_locals_at(chunk, vb_pc)):
+                            if loc_idx + j < len(local_init):
+                                local_init[loc_idx + j] = True
                 else:
                     # Generic for: for k, v in expr do
                     if loc_idx >= 0 and loc_idx + 2 < len(chunk.locals):
@@ -1323,7 +1335,16 @@ class Decompiler:
 
                     iter_val = process_value_for_output(0)
                     emit(f'for {k_name}, {v_name} in {iter_val} do', semi=False)
-                    pop_val(1)
+                    # DON'T pop: VM keeps iterator state on stack
+                    # Push loop variables (k, v)
+                    stack[top] = SVal(k_name, VKind.NAME, local_name=k_name, is_local=True)
+                    top += 1
+                    stack[top] = SVal(v_name, VKind.NAME, local_name=v_name, is_local=True)
+                    top += 1
+                    if loc_idx >= 0:
+                        for j in range(self._count_locals_at(chunk, vb_pc)):
+                            if loc_idx + j < len(local_init):
+                                local_init[loc_idx + j] = True
 
                 jump_types.append('f')
                 level += 1
@@ -1335,8 +1356,11 @@ class Decompiler:
                 emit('end', semi=False)
                 emit_blank()
 
-                # Kill counter vars (for loop internals)
-                pop_val(min(3, top))
+                # Pop loop state: 3 internals + loop var(s)
+                if op == Op.FORLOOP:
+                    pop_val(min(4, top))  # start, limit, step, loop_var
+                else:
+                    pop_val(min(4, top))  # iter_state, control, loop_k, loop_v
 
             elif op == Op.CLOSURE:
                 func_idx = get_a(ins)
