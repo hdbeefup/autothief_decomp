@@ -188,6 +188,10 @@ class PMViewer:
         self.model = None
         self.tex_cache = {}
         self.mat_groups = []  # list of (tex_id, start_idx, count)
+        self.info_label = pyglet.text.Label('', font_size=10, x=8, y=8,
+                                            color=(200, 200, 200, 220),
+                                            multiline=True, width=window.width - 16,
+                                            anchor_y='bottom')
 
         # Compile shaders
         self._compile_shaders()
@@ -337,7 +341,7 @@ class PMViewer:
                 normals.extend(n0)
                 normals.extend(n1)
                 normals.extend(n2)
-                uvs.extend([u1, 1-v1, u2, 1-v2, u3, 1-v3])
+                uvs.extend([1-u1, 1-v1, 1-u2, 1-v2, 1-u3, 1-v3])
 
             vert_count = (len(positions) // 3) - start_vert
             if vert_count > 0:
@@ -345,6 +349,14 @@ class PMViewer:
 
         self.vertex_count = len(positions) // 3
         print(f"  Total render vertices: {self.vertex_count}")
+
+        # Update info label
+        fname = os.path.basename(self.pm_path)
+        info = f"{fname}  |  {len(m.vertices)} verts, {len(m.triangles)} tris, {len(m.materials)} mats"
+        if m.build_string:
+            info += f"\n{m.build_string}"
+        self.info_label.text = info
+        self.info_label.width = self.window.width - 16
 
         # Compute bounding sphere
         if m.vertices:
@@ -449,6 +461,11 @@ class PMViewer:
 
         gl.glBindVertexArray(0)
         gl.glUseProgram(0)
+
+        # Draw info text overlay
+        gl.glDisable(gl.GL_DEPTH_TEST)
+        self.info_label.draw()
+        gl.glEnable(gl.GL_DEPTH_TEST)
 
     def on_mouse_press(self, x, y, button, modifiers):
         if button == pyglet.window.mouse.LEFT:
