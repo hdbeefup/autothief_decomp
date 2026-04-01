@@ -36,7 +36,9 @@ class PMModel:
             header_text = f.read(0x100)
             if header_text[:4] != b'NGPM':
                 raise ValueError(f"Not a PM file: bad magic {header_text[:4]!r}")
-            m.build_string = header_text[4:].split(b'\x00')[0].decode('ascii', errors='replace').strip()
+            raw = header_text[4:].split(b'\x00')[0].decode('ascii', errors='replace').strip()
+            # Strip leading control characters (e.g. \x01 version byte)
+            m.build_string = raw.lstrip('\x00\x01\x02\x03\x04\x05\x06\x07\x08').strip()
 
             # Binary header: 0x28 bytes (file offset 0x100-0x127)
             bin_header = f.read(0x28)
@@ -464,7 +466,12 @@ class PMViewer:
 
         # Draw info text overlay
         gl.glDisable(gl.GL_DEPTH_TEST)
+        gl.glDisable(gl.GL_CULL_FACE)
+        gl.glEnable(gl.GL_BLEND)
+        gl.glBlendFunc(gl.GL_SRC_ALPHA, gl.GL_ONE_MINUS_SRC_ALPHA)
         self.info_label.draw()
+        gl.glDisable(gl.GL_BLEND)
+        gl.glEnable(gl.GL_CULL_FACE)
         gl.glEnable(gl.GL_DEPTH_TEST)
 
     def on_mouse_press(self, x, y, button, modifiers):
@@ -574,10 +581,10 @@ def main():
     filename = os.path.basename(pm_path) if pm_path else "Drop a .pm file"
     config = pyglet.gl.Config(double_buffer=True, depth_size=24, sample_buffers=1, samples=4)
     try:
-        window = pyglet.window.Window(1280, 800, f"PM Viewer - {filename}", config=config, resizable=True)
+        window = pyglet.window.Window(1280, 800, f"PM Viewer - {filename}", config=config, resizable=True, file_drops=True)
     except pyglet.window.NoSuchConfigException:
         config = pyglet.gl.Config(double_buffer=True, depth_size=24)
-        window = pyglet.window.Window(1280, 800, f"PM Viewer - {filename}", config=config, resizable=True)
+        window = pyglet.window.Window(1280, 800, f"PM Viewer - {filename}", config=config, resizable=True, file_drops=True)
 
     gl.glClearColor(0.15, 0.15, 0.18, 1.0)
 
