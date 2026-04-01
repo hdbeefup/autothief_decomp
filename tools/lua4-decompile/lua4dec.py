@@ -972,9 +972,10 @@ class Decompiler:
                 a_arg = get_a(ins)
                 b_arg = get_b(ins)
 
-                # Table is at stack[top - a_arg], key at stack[top - a_arg + 1], value at top
-                tbl_idx = top - a_arg - 1
-                key_idx = top - a_arg
+                # Stack: [..., table, key, extras..., value]
+                # table at top-A, key at top-A+1, value at top-1
+                tbl_idx = top - a_arg
+                key_idx = top - a_arg + 1
                 if 0 <= tbl_idx < len(stack) and 0 <= key_idx < len(stack):
                     tbl = stack[tbl_idx].text
                     key = stack[key_idx].text
@@ -1316,9 +1317,7 @@ class Decompiler:
 
                     emit(f'for {var_name}={start_val}, {end_val}{step_text} do', semi=False)
                     # DON'T pop: VM keeps start/limit/step on stack as loop state
-                    # Push loop variable placeholder (4th slot used by for-loop)
-                    stack[top] = SVal(var_name, VKind.NAME, local_name=var_name, is_local=True)
-                    top += 1
+                    # The loop variable shares the counter slot (accessed via GETLOCAL)
                     # Mark for-loop locals as initialized so push_val doesn't grab them
                     if loc_idx >= 0:
                         for j in range(self._count_locals_at(chunk, vb_pc)):
@@ -1336,11 +1335,6 @@ class Decompiler:
                     iter_val = process_value_for_output(0)
                     emit(f'for {k_name}, {v_name} in {iter_val} do', semi=False)
                     # DON'T pop: VM keeps iterator state on stack
-                    # Push loop variables (k, v)
-                    stack[top] = SVal(k_name, VKind.NAME, local_name=k_name, is_local=True)
-                    top += 1
-                    stack[top] = SVal(v_name, VKind.NAME, local_name=v_name, is_local=True)
-                    top += 1
                     if loc_idx >= 0:
                         for j in range(self._count_locals_at(chunk, vb_pc)):
                             if loc_idx + j < len(local_init):
@@ -1356,11 +1350,8 @@ class Decompiler:
                 emit('end', semi=False)
                 emit_blank()
 
-                # Pop loop state: 3 internals + loop var(s)
-                if op == Op.FORLOOP:
-                    pop_val(min(4, top))  # start, limit, step, loop_var
-                else:
-                    pop_val(min(4, top))  # iter_state, control, loop_k, loop_v
+                # Pop loop state (3 internals: counter, limit, step)
+                pop_val(min(3, top))
 
             elif op == Op.CLOSURE:
                 func_idx = get_a(ins)
