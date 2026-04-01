@@ -733,6 +733,19 @@ class Decompiler:
             # ---- Process instruction ----
 
             if op == Op.END:
+                # Emit any pending end statements before closing
+                for epc in sorted(end_positions):
+                    level -= 1
+                    emit('end', semi=False)
+                    emit_blank()
+                end_positions.clear()
+
+                # Safety: emit missing 'end' statements to balance back to function indent
+                while level > indent:
+                    level -= 1
+                    emit('end', semi=False)
+                    emit_blank()
+
                 if top != 0 and self.debug:
                     print(f"Warning: stack not empty at END (top={top})", file=sys.stderr)
                 break

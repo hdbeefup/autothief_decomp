@@ -67,8 +67,9 @@ class PMModel:
 
             # Triangles: tri_count * 44 bytes
             # UV layout differs by flags:
-            #   flags & 1: UVs as 6 floats at offset 8-31
-            #   !(flags & 1): UVs as 6 unsigned shorts at offset 20-31 (normalized 0-1)
+            #   flags & 1: UVs as 6 floats at offset 8-31 (direct per-face UVs)
+            #   !(flags & 1): 8 floats at offset 8-39 are a UV projection matrix;
+            #                  UVs computed as u = dot(pos, row0) + offset0, v = -dot(pos, row1) - offset1
             use_float_uvs = bool(m.flags & 1)
             for _ in range(tri_count):
                 data = f.read(44)
@@ -77,10 +78,17 @@ class PMModel:
                 if use_float_uvs:
                     u1, v1, u2, v2, u3, v3 = struct.unpack_from('<ffffff', data, 8)
                 else:
-                    su1, sv1, su2, sv2, su3, sv3 = struct.unpack_from('<6H', data, 20)
-                    u1, v1 = su1 / 65535.0, sv1 / 65535.0
-                    u2, v2 = su2 / 65535.0, sv2 / 65535.0
-                    u3, v3 = su3 / 65535.0, sv3 / 65535.0
+                    # UV projection matrix: 8 floats at offset 8
+                    mx = struct.unpack_from('<8f', data, 8)
+                    uvs = []
+                    for vi in (i0, i1, i2):
+                        px, py, pz = m.vertices[vi] if vi < len(m.vertices) else (0,0,0)
+                        u = px*mx[0] + py*mx[1] + pz*mx[2] + mx[3]
+                        v = -(px*mx[4] + py*mx[5] + pz*mx[6] + mx[7])
+                        uvs.append((u, v))
+                    u1, v1 = uvs[0]
+                    u2, v2 = uvs[1]
+                    u3, v3 = uvs[2]
                 m.triangles.append((i0, i1, i2, u1, v1, u2, v2, u3, v3, 0, 0, 0, mat_idx))
 
             # Optional: extra triangle data (flags bit 2 set)
