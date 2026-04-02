@@ -213,6 +213,30 @@ def mat4x4_multiply(a, b):
     return tuple(r)
 
 
+def mat4x4_invert_rigid(m):
+    """Invert a rigid body transform (rotation + translation). Much simpler than general inverse."""
+    # Transpose the 3x3 rotation part
+    r = [0.0] * 16
+    r[0] = m[0]; r[1] = m[4]; r[2] = m[8]
+    r[4] = m[1]; r[5] = m[5]; r[6] = m[9]
+    r[8] = m[2]; r[9] = m[6]; r[10] = m[10]
+    # New translation = -R^T * t
+    tx, ty, tz = m[3], m[7], m[11]
+    r[3]  = -(r[0]*tx + r[1]*ty + r[2]*tz)
+    r[7]  = -(r[4]*tx + r[5]*ty + r[6]*tz)
+    r[11] = -(r[8]*tx + r[9]*ty + r[10]*tz)
+    r[15] = 1.0
+    return tuple(r)
+
+
+def mat4x4_transform_point(m, px, py, pz):
+    """Transform a point by a row-major 4x4 matrix."""
+    ox = m[0]*px + m[1]*py + m[2]*pz + m[3]
+    oy = m[4]*px + m[5]*py + m[6]*pz + m[7]
+    oz = m[8]*px + m[9]*py + m[10]*pz + m[11]
+    return (ox, oy, oz)
+
+
 # Biped bone hierarchy (parent → children) for 3ds Max Biped skeleton
 BIPED_HIERARCHY = {
     'Bip01': 'Bip01 Pelvis',
@@ -422,6 +446,10 @@ class PMViewer:
         self.anim_last_time = 0.0
         self.show_skeleton = True
 
+        # Skinning data
+        self.vertex_bone_map = []    # per-vertex bone index (nearest-bone assignment)
+        self.bind_inv = []           # inverse bind pose matrices
+
         # Skeleton GL objects
         self.skel_vao = 0
         self.skel_vbo = 0
@@ -507,6 +535,121 @@ class PMViewer:
         else:
             print(f"  No animations found for this model")
 
+    def _compute_bone_assignments(self):
+        """Assign each model vertex to its nearest bone using frame 0 positions."""
+        if not self.current_anim or not self.model:
+            self.vertex_bone_map = []
+            return
+        # Get bone positions at frame 0 (bind pose)
+        bone_positions = []
+        for bone in self.current_anim.bones:
+            if bone.keyframes:
+                mat = bone.keyframes[0]
+                tx, ty, tz = mat[3], mat[7], mat[11]
+                bone_positions.append((-tx, ty, tz))  # LH → RH
+            else:
+                bone_positions.append((0, 0, 0))
+
+        # For each original vertex, find nearest bone
+        self.vertex_bone_map = []
+        for vx, vy, vz in self.model.vertices:
+            best_dist = float('inf')
+            best_bone = 0
+            for bi, (bx, by, bz) in enumerate(bone_positions):
+                dx = vx - bx
+                dy = vy - by
+                dz = vz - bz
+                d = dx*dx + dy*dy + dz*dz
+                if d < best_dist:
+                    best_dist = d
+                    best_bone = bi
+            self.vertex_bone_map.append(best_bone)
+
+    def _compute_bind_pose_inverses(self):
+        """Compute inverse bind pose matrices from frame 0."""
+        self.bind_inv = []
+        if not self.current_anim:
+            return
+        for bone in self.current_anim.bones:
+            if bone.keyframes:
+                mat = bone.keyframes[0]
+                self.bind_inv.append(mat4x4_invert_rigid(mat))
+            else:
+                self.bind_inv.append((1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1))
+
+    def _deform_mesh(self, frame_float):
+        """Apply bone transforms to vertex positions and upload to GPU."""
+        if not self.current_anim or not self.vertex_bone_map or not self.bind_inv:
+            return
+        anim = self.current_anim
+        frame_int = int(frame_float) % max(1, anim.frame_count)
+
+        # Get current frame matrices
+        cur_matrices = []
+        for bi, bone in enumerate(anim.bones):
+            if bone.keyframes:
+                kf_idx = frame_int % len(bone.keyframes)
+                cur_matrices.append(bone.keyframes[kf_idx])
+            else:
+                cur_matrices.append((1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1))
+
+        # Precompute delta matrices: cur * inv_bind
+        deltas = []
+        for bi in range(len(anim.bones)):
+            deltas.append(mat4x4_multiply(cur_matrices[bi], self.bind_inv[bi]))
+
+        # Transform vertices
+        m = self.model
+        has_per_vertex_normals = bool(m.normals)
+        from collections import defaultdict
+        tris_by_mat = defaultdict(list)
+        for tri in m.triangles:
+            tris_by_mat[tri[12]].append(tri)
+
+        positions = []
+        normals = []
+        uvs = []
+
+        for mi in sorted(tris_by_mat.keys()):
+            for tri in tris_by_mat[mi]:
+                i0, i1, i2 = tri[0], tri[1], tri[2]
+                u1, v1, u2, v2, u3, v3 = tri[3], tri[4], tri[5], tri[6], tri[7], tri[8]
+
+                for vi in (i0, i1, i2):
+                    p = m.vertices[vi] if vi < len(m.vertices) else (0,0,0)
+                    bone_idx = self.vertex_bone_map[vi] if vi < len(self.vertex_bone_map) else 0
+                    delta = deltas[bone_idx]
+                    # Transform from RH back to original, apply delta, convert back
+                    # Original vertices are already in RH space (-x, y, z)
+                    # Delta matrices are in LH space, so convert point to LH, transform, convert back
+                    lh_x, lh_y, lh_z = -p[0], p[1], p[2]
+                    tx, ty, tz = mat4x4_transform_point(delta, lh_x, lh_y, lh_z)
+                    positions.extend((-tx, ty, tz))
+
+                if has_per_vertex_normals:
+                    for vi in (i0, i1, i2):
+                        n = m.normals[vi] if vi < len(m.normals) else (0,1,0)
+                        normals.extend(n)
+                else:
+                    p0 = positions[-9:-6]
+                    p1 = positions[-6:-3]
+                    p2 = positions[-3:]
+                    n = _compute_face_normal(p0, p1, p2)
+                    normals.extend(n * 3)
+
+                uvs.extend([u1, 1-v1, u2, 1-v2, u3, 1-v3])
+
+        # Upload to GPU
+        if positions:
+            gl.glBindVertexArray(self.vao)
+            gl.glBindBuffer(gl.GL_ARRAY_BUFFER, self.vbo_pos)
+            pos_data = (gl.GLfloat * len(positions))(*positions)
+            gl.glBufferSubData(gl.GL_ARRAY_BUFFER, 0, ctypes.sizeof(pos_data), pos_data)
+            gl.glBindBuffer(gl.GL_ARRAY_BUFFER, self.vbo_nrm)
+            nrm_data = (gl.GLfloat * len(normals))(*normals)
+            gl.glBufferSubData(gl.GL_ARRAY_BUFFER, 0, ctypes.sizeof(nrm_data), nrm_data)
+            gl.glBindVertexArray(0)
+
     def _load_animation(self, idx):
         """Load animation by index into anim_names."""
         if not self.anim_names or idx < 0 or idx >= len(self.anim_names):
@@ -525,6 +668,8 @@ class PMViewer:
             self.anim_playing = True
             print(f"  Playing: {name} ({self.current_anim.frame_count} frames, "
                   f"{len(self.current_anim.bones)} bones)")
+            self._compute_bind_pose_inverses()
+            self._compute_bone_assignments()
             self._update_skeleton_geometry(0)
         except Exception as e:
             print(f"  Error loading animation '{name}': {e}")
@@ -860,6 +1005,7 @@ class PMViewer:
             if self.anim_time >= self.current_anim.frame_count:
                 self.anim_time -= self.current_anim.frame_count
             self._update_skeleton_geometry(self.anim_time)
+            self._deform_mesh(self.anim_time)
             self._update_info_label()
 
         # Draw skeleton overlay

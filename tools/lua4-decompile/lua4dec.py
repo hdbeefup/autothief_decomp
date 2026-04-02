@@ -568,6 +568,34 @@ class Decompiler:
         """Count locals with endpc == vb_pc."""
         return sum(1 for loc in chunk.locals if loc.endpc == vb_pc)
 
+    def _compute_local_slots(self, chunk):
+        """Compute VM stack slot for each local entry by simulating the compiler."""
+        events = []
+        for i, loc in enumerate(chunk.locals):
+            events.append((loc.startpc, 1, i))   # 1 = start
+            events.append((loc.endpc, 0, i))      # 0 = end (sorts before starts at same PC)
+        events.sort()
+
+        slots = {}
+        nactvar = 0
+        for _pc, event_type, idx in events:
+            if event_type == 0:
+                nactvar -= 1
+            else:
+                slots[idx] = nactvar
+                nactvar += 1
+        return slots
+
+    def _resolve_local(self, chunk, slot, vb_pc, local_slots):
+        """Find the local variable name occupying 'slot' at 'vb_pc'."""
+        for i, loc in enumerate(chunk.locals):
+            if local_slots.get(i) == slot and loc.startpc <= vb_pc < loc.endpc:
+                return loc.name
+        # Fallback: direct index
+        if slot < len(chunk.locals):
+            return chunk.locals[slot].name
+        return f'local_{slot}'
+
     # ----------------------------------------------------------
     # Stack helpers
     # ----------------------------------------------------------
@@ -589,6 +617,9 @@ class Decompiler:
         N = len(ins_list)
         if N == 0:
             return []
+
+        # Pre-compute local variable slot assignments
+        local_slots = self._compute_local_slots(chunk)
 
         # Stack (VM-like, 0-based positions)
         stack = [SVal('nil', VKind.NIL)] * max(chunk.max_stack_size + 16, 256)
@@ -865,10 +896,7 @@ class Decompiler:
 
             elif op == Op.GETLOCAL:
                 idx = get_u(ins)
-                if idx < len(chunk.locals):
-                    name = chunk.locals[idx].name
-                else:
-                    name = f'local_{idx}'
+                name = self._resolve_local(chunk, idx, vb_pc, local_slots)
                 # Push a copy of the local's name
                 stack[top] = SVal(name, VKind.NAME)
                 top += 1
@@ -891,7 +919,7 @@ class Decompiler:
                     pop_val(1)
                 elif op == Op.GETINDEXED:
                     idx = get_u(ins)
-                    key = chunk.locals[idx].name if idx < len(chunk.locals) else f'idx_{idx}'
+                    key = self._resolve_local(chunk, idx, vb_pc, local_slots)
                     tbl = peek(0).text
                     result = self._format_table_access(tbl, key)
                     pop_val(1)
@@ -922,10 +950,7 @@ class Decompiler:
 
             elif op == Op.SETLOCAL:
                 idx = get_u(ins)
-                if idx < len(chunk.locals):
-                    name = chunk.locals[idx].name
-                else:
-                    name = f'local_{idx}'
+                name = self._resolve_local(chunk, idx, vb_pc, local_slots)
 
                 val_text = process_value_for_output()
 
