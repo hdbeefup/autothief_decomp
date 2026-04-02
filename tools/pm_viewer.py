@@ -49,9 +49,11 @@ class PMModel:
             helper_count = struct.unpack_from('<B', bin_header, 14)[0]
 
             # Vertices: vert_count * 12 bytes
+            m._raw_vertices = []  # original positions for UV projection
             for _ in range(vert_count):
                 x, y, z = struct.unpack('<fff', f.read(12))
-                m.vertices.append((x, y, z))
+                m._raw_vertices.append((x, y, z))
+                m.vertices.append((-x, y, z))  # negate X: LH (D3D) → RH (OpenGL)
 
             # Optional: vertex indices (flags bit 0 clear)
             if not (m.flags & 1):
@@ -66,10 +68,10 @@ class PMModel:
                     m.normals.append((nx, ny, nz))
 
             # Triangles: tri_count * 44 bytes
+            # Winding is CW (D3D convention) — swap i1/i2 for CCW (OpenGL).
             # UV layout differs by flags:
             #   flags & 1: UVs as 6 floats at offset 8-31 (direct per-face UVs)
-            #   !(flags & 1): 8 floats at offset 8-39 are a UV projection matrix;
-            #                  UVs computed as u = dot(pos, row0) + offset0, v = -dot(pos, row1) - offset1
+            #   !(flags & 1): 8 floats at offset 8-39 are a UV projection matrix
             use_float_uvs = bool(m.flags & 1)
             for _ in range(tri_count):
                 data = f.read(44)
@@ -82,9 +84,9 @@ class PMModel:
                     mx = struct.unpack_from('<8f', data, 8)
                     uvs = []
                     for vi in (i0, i1, i2):
-                        px, py, pz = m.vertices[vi] if vi < len(m.vertices) else (0,0,0)
+                        px, py, pz = m._raw_vertices[vi] if vi < len(m._raw_vertices) else (0,0,0)
                         u = px*mx[0] + py*mx[1] + pz*mx[2] + mx[3]
-                        v = -(px*mx[4] + py*mx[5] + pz*mx[6] + mx[7])
+                        v = px*mx[4] + py*mx[5] + pz*mx[6] + mx[7]
                         uvs.append((u, v))
                     u1, v1 = uvs[0]
                     u2, v2 = uvs[1]
@@ -357,7 +359,7 @@ class PMViewer:
                 normals.extend(n0)
                 normals.extend(n1)
                 normals.extend(n2)
-                uvs.extend([1-u1, 1-v1, 1-u2, 1-v2, 1-u3, 1-v3])
+                uvs.extend([u1, 1-v1, u2, 1-v2, u3, 1-v3])
 
             vert_count = (len(positions) // 3) - start_vert
             if vert_count > 0:
@@ -426,7 +428,7 @@ class PMViewer:
         self.window.clear()
         gl.glEnable(gl.GL_DEPTH_TEST)
         gl.glEnable(gl.GL_CULL_FACE)
-        gl.glCullFace(gl.GL_FRONT)
+        gl.glCullFace(gl.GL_BACK)
 
         gl.glUseProgram(self.program)
 

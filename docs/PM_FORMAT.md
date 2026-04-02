@@ -178,11 +178,13 @@ UV coordinates are stored directly as IEEE 754 floats. Values are typically in t
 UV coordinates are **computed** at runtime by projecting each vertex position through the per-face affine matrix:
 
 ```
-u =  (pos.x * m0 + pos.y * m1 + pos.z * m2 + m3)
-v = -(pos.x * m4 + pos.y * m5 + pos.z * m6 + m7)
+u = pos.x * m0 + pos.y * m1 + pos.z * m2 + m3
+v = pos.x * m4 + pos.y * m5 + pos.z * m6 + m7
 ```
 
 This is equivalent to a planar/box UV projection commonly used in 3ds Max for architectural and environmental models. Each face carries its own projection, allowing different faces to be mapped from different angles.
+
+**Note:** The original D3D engine code negates V (`v = -v`) because Direct3D uses top-down V coordinates. When rendering in OpenGL, apply the standard `V = 1 - V` flip instead (same as for flags=1 direct UVs).
 
 ### Material Index (byte 40)
 
