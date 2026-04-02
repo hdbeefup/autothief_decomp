@@ -1,6 +1,6 @@
 # PM Model Format Specification
 
-**Game:** AutoThief / CarJacker (Phantom EFX, 2005)  
+**Game:** AutoThief / CarJacker (Kozmogames, 2005)  
 **Engine:** PBE Engine (pbeScene.cpp / pbeTexture.cpp)  
 **Magic:** `NGPM` (4 bytes)  
 **File extensions:** `.pm`, `.PM`  
