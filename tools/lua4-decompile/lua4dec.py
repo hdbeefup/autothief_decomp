@@ -270,10 +270,24 @@ def fmt_number(n):
     return s
 
 def fmt_string(s):
-    """Format a string literal for Lua output (with quotes)."""
-    if '"' in s or '\n' in s or '\r' in s:
-        return '[[' + s + ']]'
-    return '"' + s + '"'
+    """Format a string literal for Lua output (with quotes).
+
+    Must escape backslashes because Lua interprets \\a \\b \\f \\n \\r \\t \\v
+    as escape sequences. Without escaping, paths like "Music\\action.ogg"
+    would have \\a replaced with bell character (0x07).
+    """
+    if '\n' in s or '\r' in s:
+        # Use long string syntax which doesn't process escapes
+        # Handle nested ]] by using longer delimiters
+        if ']]' not in s:
+            return '[[' + s + ']]'
+        level = 1
+        while f']{"=" * level}]' in s:
+            level += 1
+        return f'[{"=" * level}[{s}]{"=" * level}]'
+    # Escape backslashes and quotes for regular strings
+    escaped = s.replace('\\', '\\\\').replace('"', '\\"')
+    return '"' + escaped + '"'
 
 def _escape_backslashes(s):
     """Escape backslashes in an output string for Lua."""

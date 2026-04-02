@@ -1,0 +1,1 @@
+python tools/str_dlg_viewer.py --gui "N:\GamesRE\CarJacker\text.str" "N:\GamesRE\CarJacker\text.dlg"
