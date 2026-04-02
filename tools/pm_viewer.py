@@ -1,13 +1,16 @@
 """
 3D Model Viewer for AutoThief/CarJacker .PM files using pyglet 2.x modern OpenGL.
 PM format: NGPM magic, 3D mesh with vertices, triangles (per-face UVs), materials (DDS textures).
+ALF animation support: skeletal animation overlay with bone visualization.
 """
 
 import ctypes
+import glob
 import math
 import os
 import struct
 import sys
+import time
 
 import pyglet
 from pyglet import gl
@@ -110,6 +113,176 @@ class PMModel:
         return m
 
 
+# ── ALF animation parser ───────────────────────────────────────────────────
+
+class ALFBone:
+    """A single bone's animation data."""
+    __slots__ = ('name', 'keyframes')
+    def __init__(self, name, keyframes):
+        self.name = name          # str
+        self.keyframes = keyframes  # list of 16-float tuples (4x4 row-major matrix)
+
+class ALFAnimation:
+    """Parsed .ALF animation data."""
+    __slots__ = ('name', 'frame_count', 'bones', 'positions')
+
+    @staticmethod
+    def load(filepath):
+        anim = ALFAnimation()
+        with open(filepath, 'rb') as f:
+            data = f.read()
+
+        # Header: 0x44 bytes
+        anim.name = data[0:32].split(b'\x00')[0].decode('ascii', errors='replace')
+        flag = data[0x3F]
+        anim.frame_count = struct.unpack_from('<H', data, 0x40)[0]
+        bone_count = data[0x42]
+
+        offset = 0x44
+        anim.bones = []
+        for _ in range(bone_count):
+            # Bone header: 0x48 bytes
+            bone_name = data[offset:offset+64].split(b'\x00')[0].decode('ascii', errors='replace')
+            kf_count = struct.unpack_from('<H', data, offset + 0x40)[0]
+            offset += 0x48
+
+            # Keyframe data: kf_count * 0x40 bytes (each is 16 floats = 4x4 matrix)
+            keyframes = []
+            for _ in range(kf_count):
+                mat = struct.unpack_from('<16f', data, offset)
+                keyframes.append(mat)
+                offset += 0x40
+            anim.bones.append(ALFBone(bone_name, keyframes))
+
+        # Root position track
+        anim.positions = []
+        for _ in range(anim.frame_count):
+            if flag == 0:
+                rec = data[offset:offset+0x1C]
+                x, y, z = struct.unpack_from('<fff', rec, 0)
+                flags = rec[24] if len(rec) > 24 else 0
+                offset += 0x1C
+            else:
+                x, y, z, flags = struct.unpack_from('<fffI', data, offset)
+                offset += 0x10
+            anim.positions.append((-x, y, z))  # negate X: LH → RH
+
+        return anim
+
+
+def find_animations(pm_path):
+    """Find matching animation folder for a .pm model file.
+    Returns (character_name, {anim_name: filepath}) or (None, {}).
+    """
+    model_dir = os.path.dirname(os.path.abspath(pm_path))
+    model_name = os.path.splitext(os.path.basename(pm_path))[0].lower()
+
+    # Look for Animations/ folder as sibling to Models/
+    for parent in [model_dir, os.path.dirname(model_dir)]:
+        anim_root = os.path.join(parent, 'Animations')
+        if not os.path.isdir(anim_root):
+            continue
+        # Case-insensitive match for character folder
+        for entry in os.listdir(anim_root):
+            if entry.lower() == model_name:
+                char_dir = os.path.join(anim_root, entry)
+                anims = {}
+                for alf in os.listdir(char_dir):
+                    if alf.lower().endswith('.alf'):
+                        anim_name = os.path.splitext(alf)[0].lower()
+                        anims[anim_name] = os.path.join(char_dir, alf)
+                if anims:
+                    return entry, anims
+    return None, {}
+
+
+def mat4x4_get_translation(mat):
+    """Extract translation (column 3) from a row-major 4x4 matrix."""
+    return (mat[3], mat[7], mat[11])
+
+
+def mat4x4_multiply(a, b):
+    """Multiply two row-major 4x4 matrices."""
+    r = [0.0] * 16
+    for row in range(4):
+        for col in range(4):
+            s = 0.0
+            for k in range(4):
+                s += a[row * 4 + k] * b[k * 4 + col]
+            r[row * 4 + col] = s
+    return tuple(r)
+
+
+# Biped bone hierarchy (parent → children) for 3ds Max Biped skeleton
+BIPED_HIERARCHY = {
+    'Bip01': 'Bip01 Pelvis',
+    'Bip01 Pelvis': 'Bip01 Spine',
+    'Bip01 Spine': 'Bip01 Spine1',
+    'Bip01 Spine1': 'Bip01 Spine2',
+    'Bip01 Spine2': 'Bip01 Neck',
+    'Bip01 Neck': 'Bip01 Head',
+    # Left arm
+    'Bip01 L Clavicle': 'Bip01 L UpperArm',
+    'Bip01 L UpperArm': 'Bip01 L Forearm',
+    'Bip01 L Forearm': 'Bip01 L Hand',
+    # Right arm
+    'Bip01 R Clavicle': 'Bip01 R UpperArm',
+    'Bip01 R UpperArm': 'Bip01 R Forearm',
+    'Bip01 R Forearm': 'Bip01 R Hand',
+    # Left leg
+    'Bip01 L Thigh': 'Bip01 L Calf',
+    'Bip01 L Calf': 'Bip01 L Foot',
+    'Bip01 L Foot': 'Bip01 L Toe0',
+    # Right leg
+    'Bip01 R Thigh': 'Bip01 R Calf',
+    'Bip01 R Calf': 'Bip01 R Foot',
+    'Bip01 R Foot': 'Bip01 R Toe0',
+}
+
+# Bones that branch off Spine2
+SPINE2_CHILDREN = ['Bip01 Neck', 'Bip01 L Clavicle', 'Bip01 R Clavicle']
+# Bones that branch off Pelvis
+PELVIS_CHILDREN = ['Bip01 Spine', 'Bip01 L Thigh', 'Bip01 R Thigh']
+
+
+def build_bone_connections(bone_names):
+    """Build list of (parent_name, child_name) pairs from available bones."""
+    name_set = set(bone_names)
+    connections = []
+
+    # Pelvis branches
+    for child in PELVIS_CHILDREN:
+        if 'Bip01 Pelvis' in name_set and child in name_set:
+            connections.append(('Bip01 Pelvis', child))
+
+    # Spine2 branches
+    for child in SPINE2_CHILDREN:
+        if 'Bip01 Spine2' in name_set and child in name_set:
+            connections.append(('Bip01 Spine2', child))
+
+    # Chain connections
+    for parent, child in BIPED_HIERARCHY.items():
+        if parent in name_set and child in name_set:
+            if (parent, child) not in connections:
+                connections.append((parent, child))
+
+    # Finger chains
+    for side in ('L', 'R'):
+        for finger_idx in range(3):
+            for knuckle in range(3):
+                parent_name = f'Bip01 {side} Finger{finger_idx}{knuckle}'
+                child_name = f'Bip01 {side} Finger{finger_idx}{knuckle + 1}'
+                if parent_name in name_set and child_name in name_set:
+                    connections.append((parent_name, child_name))
+            # Hand → first knuckle
+            hand = f'Bip01 {side} Hand'
+            first = f'Bip01 {side} Finger{finger_idx}0'
+            if hand in name_set and first in name_set:
+                connections.append((hand, first))
+
+    return connections
+
+
 # ── Shaders ─────────────────────────────────────────────────────────────────
 
 VERTEX_SHADER = """#version 330 core
@@ -165,6 +338,32 @@ void main() {
 }
 """
 
+# Simple shader for skeleton lines/points
+SKEL_VERTEX_SHADER = """#version 330 core
+layout(location = 0) in vec3 position;
+layout(location = 1) in vec3 color;
+
+uniform mat4 projection;
+uniform mat4 view;
+
+out vec3 v_color;
+
+void main() {
+    gl_Position = projection * view * vec4(position, 1.0);
+    gl_PointSize = 6.0;
+    v_color = color;
+}
+"""
+
+SKEL_FRAGMENT_SHADER = """#version 330 core
+in vec3 v_color;
+out vec4 frag_color;
+
+void main() {
+    frag_color = vec4(v_color, 1.0);
+}
+"""
+
 
 # ── Viewer ──────────────────────────────────────────────────────────────────
 
@@ -211,8 +410,28 @@ class PMViewer:
                                             multiline=True, width=window.width - 16,
                                             anchor_y='bottom')
 
+        # Animation state
+        self.anim_available = {}     # {name: filepath}
+        self.anim_names = []         # sorted list of animation names
+        self.anim_char_name = None   # character name from Animations/ folder
+        self.current_anim = None     # loaded ALFAnimation
+        self.current_anim_idx = -1   # index into anim_names (-1 = none)
+        self.anim_playing = False
+        self.anim_time = 0.0
+        self.anim_fps = 30.0
+        self.anim_last_time = 0.0
+        self.show_skeleton = True
+
+        # Skeleton GL objects
+        self.skel_vao = 0
+        self.skel_vbo = 0
+        self.skel_line_count = 0
+        self.skel_point_count = 0
+        self.skel_program = 0
+
         # Compile shaders
         self._compile_shaders()
+        self._compile_skel_shaders()
 
         # Load model
         self._load_model()
@@ -247,6 +466,162 @@ class PMViewer:
         self.u_has_texture = gl.glGetUniformLocation(self.program, b"has_texture")
         self.u_light_dir = gl.glGetUniformLocation(self.program, b"light_dir")
         self.u_wireframe = gl.glGetUniformLocation(self.program, b"wireframe")
+
+    def _compile_skel_shaders(self):
+        vs = gl.GLuint(gl.glCreateShader(gl.GL_VERTEX_SHADER))
+        src = SKEL_VERTEX_SHADER.encode('utf-8')
+        buf = ctypes.create_string_buffer(src)
+        ptr = ctypes.cast(buf, ctypes.POINTER(ctypes.c_char))
+        length = gl.GLint(len(src))
+        gl.glShaderSource(vs, 1, ctypes.byref(ptr), ctypes.byref(length))
+        gl.glCompileShader(vs)
+
+        fs = gl.GLuint(gl.glCreateShader(gl.GL_FRAGMENT_SHADER))
+        src = SKEL_FRAGMENT_SHADER.encode('utf-8')
+        buf = ctypes.create_string_buffer(src)
+        ptr = ctypes.cast(buf, ctypes.POINTER(ctypes.c_char))
+        length = gl.GLint(len(src))
+        gl.glShaderSource(fs, 1, ctypes.byref(ptr), ctypes.byref(length))
+        gl.glCompileShader(fs)
+
+        self.skel_program = gl.glCreateProgram()
+        gl.glAttachShader(self.skel_program, vs)
+        gl.glAttachShader(self.skel_program, fs)
+        gl.glLinkProgram(self.skel_program)
+
+        gl.glDeleteShader(vs)
+        gl.glDeleteShader(fs)
+
+        self.su_projection = gl.glGetUniformLocation(self.skel_program, b"projection")
+        self.su_view = gl.glGetUniformLocation(self.skel_program, b"view")
+
+    def _discover_animations(self):
+        """Find animations matching the current model name."""
+        self.anim_char_name, self.anim_available = find_animations(self.pm_path)
+        self.anim_names = sorted(self.anim_available.keys())
+        self.current_anim = None
+        self.current_anim_idx = -1
+        self.anim_playing = False
+        if self.anim_names:
+            print(f"  Animations found ({self.anim_char_name}): {', '.join(self.anim_names)}")
+        else:
+            print(f"  No animations found for this model")
+
+    def _load_animation(self, idx):
+        """Load animation by index into anim_names."""
+        if not self.anim_names or idx < 0 or idx >= len(self.anim_names):
+            self.current_anim = None
+            self.current_anim_idx = -1
+            self.anim_playing = False
+            self._update_info_label()
+            return
+        name = self.anim_names[idx]
+        filepath = self.anim_available[name]
+        try:
+            self.current_anim = ALFAnimation.load(filepath)
+            self.current_anim_idx = idx
+            self.anim_time = 0.0
+            self.anim_last_time = time.monotonic()
+            self.anim_playing = True
+            print(f"  Playing: {name} ({self.current_anim.frame_count} frames, "
+                  f"{len(self.current_anim.bones)} bones)")
+            self._update_skeleton_geometry(0)
+        except Exception as e:
+            print(f"  Error loading animation '{name}': {e}")
+            self.current_anim = None
+            self.current_anim_idx = idx
+            self.anim_playing = False
+        self._update_info_label()
+
+    def _update_info_label(self):
+        fname = os.path.basename(self.pm_path)
+        m = self.model
+        info = f"{fname}  |  {len(m.vertices)} verts, {len(m.triangles)} tris, {len(m.materials)} mats"
+        if self.anim_names:
+            anim_name = self.anim_names[self.current_anim_idx] if self.current_anim_idx >= 0 else "none"
+            status = "playing" if self.anim_playing else "paused"
+            if self.current_anim_idx < 0:
+                status = ""
+            info += f"\nAnim: {anim_name} [{self.current_anim_idx+1}/{len(self.anim_names)}]"
+            if status:
+                frame = int(self.anim_time) if self.current_anim else 0
+                total = self.current_anim.frame_count if self.current_anim else 0
+                info += f"  {status}  frame {frame}/{total}"
+            info += f"\n[A/D] prev/next anim  [Space] play/pause  [S] skeleton"
+        self.info_label.text = info
+        self.info_label.width = self.window.width - 16
+
+    def _get_bone_positions(self, frame_float):
+        """Get world-space positions for all bones at a given fractional frame."""
+        anim = self.current_anim
+        if not anim:
+            return {}
+        positions = {}
+        frame_int = int(frame_float) % max(1, anim.frame_count)
+        for bone in anim.bones:
+            if not bone.keyframes:
+                continue
+            kf_idx = frame_int % len(bone.keyframes)
+            mat = bone.keyframes[kf_idx]
+            # Translation is in column 3 of row-major matrix (indices 3, 7, 11)
+            tx, ty, tz = mat[3], mat[7], mat[11]
+            positions[bone.name] = (-tx, ty, tz)  # negate X: LH → RH
+        return positions
+
+    def _update_skeleton_geometry(self, frame_float):
+        """Rebuild skeleton line/point VBO for the current frame."""
+        bone_positions = self._get_bone_positions(frame_float)
+        if not bone_positions:
+            self.skel_line_count = 0
+            self.skel_point_count = 0
+            return
+
+        bone_names = [b.name for b in self.current_anim.bones]
+        connections = build_bone_connections(bone_names)
+
+        # Build vertex data: position(3) + color(3) per vertex
+        line_verts = []
+        point_verts = []
+
+        # Lines: yellow
+        for parent_name, child_name in connections:
+            if parent_name in bone_positions and child_name in bone_positions:
+                p = bone_positions[parent_name]
+                c = bone_positions[child_name]
+                line_verts.extend([p[0], p[1], p[2], 1.0, 0.9, 0.2])
+                line_verts.extend([c[0], c[1], c[2], 1.0, 0.9, 0.2])
+
+        # Points: red for joints
+        for name, pos in bone_positions.items():
+            point_verts.extend([pos[0], pos[1], pos[2], 1.0, 0.3, 0.3])
+
+        self.skel_line_count = len(line_verts) // 6
+        self.skel_point_count = len(point_verts) // 6
+
+        all_verts = line_verts + point_verts
+        if not all_verts:
+            return
+
+        # Upload to GPU
+        if not self.skel_vao:
+            vao = gl.GLuint()
+            gl.glGenVertexArrays(1, ctypes.byref(vao))
+            self.skel_vao = vao.value
+            vbo = gl.GLuint()
+            gl.glGenBuffers(1, ctypes.byref(vbo))
+            self.skel_vbo = vbo.value
+
+        gl.glBindVertexArray(self.skel_vao)
+        gl.glBindBuffer(gl.GL_ARRAY_BUFFER, self.skel_vbo)
+        data = (gl.GLfloat * len(all_verts))(*all_verts)
+        gl.glBufferData(gl.GL_ARRAY_BUFFER, ctypes.sizeof(data), data, gl.GL_DYNAMIC_DRAW)
+        stride = 6 * 4  # 6 floats * 4 bytes
+        gl.glVertexAttribPointer(0, 3, gl.GL_FLOAT, gl.GL_FALSE, stride, None)
+        gl.glEnableVertexAttribArray(0)
+        offset_ptr = ctypes.c_void_p(3 * 4)
+        gl.glVertexAttribPointer(1, 3, gl.GL_FLOAT, gl.GL_FALSE, stride, offset_ptr)
+        gl.glEnableVertexAttribArray(1)
+        gl.glBindVertexArray(0)
 
     def _load_texture(self, tex_name):
         """Load a DDS texture from textures_root/tex_name.dds."""
@@ -368,13 +743,9 @@ class PMViewer:
         self.vertex_count = len(positions) // 3
         print(f"  Total render vertices: {self.vertex_count}")
 
-        # Update info label
-        fname = os.path.basename(self.pm_path)
-        info = f"{fname}  |  {len(m.vertices)} verts, {len(m.triangles)} tris, {len(m.materials)} mats"
-        if m.build_string:
-            info += f"\n{m.build_string}"
-        self.info_label.text = info
-        self.info_label.width = self.window.width - 16
+        # Discover animations
+        self._discover_animations()
+        self._update_info_label()
 
         # Compute bounding sphere
         if m.vertices:
@@ -480,6 +851,38 @@ class PMViewer:
         gl.glBindVertexArray(0)
         gl.glUseProgram(0)
 
+        # Advance animation
+        if self.anim_playing and self.current_anim:
+            now = time.monotonic()
+            dt = now - self.anim_last_time
+            self.anim_last_time = now
+            self.anim_time += dt * self.anim_fps
+            if self.anim_time >= self.current_anim.frame_count:
+                self.anim_time -= self.current_anim.frame_count
+            self._update_skeleton_geometry(self.anim_time)
+            self._update_info_label()
+
+        # Draw skeleton overlay
+        if self.show_skeleton and self.current_anim and self.skel_vao and (self.skel_line_count or self.skel_point_count):
+            gl.glUseProgram(self.skel_program)
+            gl.glUniformMatrix4fv(self.su_projection, 1, gl.GL_FALSE, proj_arr)
+            gl.glUniformMatrix4fv(self.su_view, 1, gl.GL_FALSE, view_arr)
+            gl.glBindVertexArray(self.skel_vao)
+            gl.glDisable(gl.GL_DEPTH_TEST)
+
+            if self.skel_line_count:
+                gl.glLineWidth(2.0)
+                gl.glDrawArrays(gl.GL_LINES, 0, self.skel_line_count)
+
+            if self.skel_point_count:
+                gl.glEnable(gl.GL_PROGRAM_POINT_SIZE)
+                gl.glDrawArrays(gl.GL_POINTS, self.skel_line_count, self.skel_point_count)
+                gl.glDisable(gl.GL_PROGRAM_POINT_SIZE)
+
+            gl.glEnable(gl.GL_DEPTH_TEST)
+            gl.glBindVertexArray(0)
+            gl.glUseProgram(0)
+
         # Draw info text overlay
         gl.glDisable(gl.GL_DEPTH_TEST)
         gl.glDisable(gl.GL_CULL_FACE)
@@ -531,6 +934,22 @@ class PMViewer:
             self.show_wireframe = not self.show_wireframe
         elif symbol == pyglet.window.key.R:
             self._reset_camera()
+        elif symbol == pyglet.window.key.S:
+            self.show_skeleton = not self.show_skeleton
+        elif symbol == pyglet.window.key.SPACE:
+            if self.current_anim:
+                self.anim_playing = not self.anim_playing
+                if self.anim_playing:
+                    self.anim_last_time = time.monotonic()
+                self._update_info_label()
+        elif symbol == pyglet.window.key.D:
+            if self.anim_names:
+                idx = (self.current_anim_idx + 1) % len(self.anim_names)
+                self._load_animation(idx)
+        elif symbol == pyglet.window.key.A:
+            if self.anim_names:
+                idx = (self.current_anim_idx - 1) % len(self.anim_names)
+                self._load_animation(idx)
 
     def _reset_camera(self):
         self.yaw = 0.0
@@ -555,6 +974,15 @@ class PMViewer:
             if val:
                 buf = gl.GLuint(val)
                 gl.glDeleteBuffers(1, ctypes.byref(buf))
+        # Clean up skeleton GL objects
+        if self.skel_vao:
+            vao = gl.GLuint(self.skel_vao)
+            gl.glDeleteVertexArrays(1, ctypes.byref(vao))
+            self.skel_vao = 0
+        if self.skel_vbo:
+            buf = gl.GLuint(self.skel_vbo)
+            gl.glDeleteBuffers(1, ctypes.byref(buf))
+            self.skel_vbo = 0
         # Clear texture cache
         for tid in self.tex_cache.values():
             if tid:
@@ -581,6 +1009,7 @@ def main():
         print("Usage: python pm_viewer.py [model.pm] [textures_root]")
         print("  Drag & drop .pm files onto the window to load them.")
         print("Controls: LMB=orbit, RMB=pan, Scroll=zoom, W=wireframe, R=reset")
+        print("  A/D=prev/next animation, Space=play/pause, S=toggle skeleton")
 
     pm_path = sys.argv[1] if len(sys.argv) > 1 else None
     textures_root = sys.argv[2] if len(sys.argv) > 2 else None
@@ -652,6 +1081,12 @@ def main():
                     print(f"Error loading {path}: {e}")
                 break
 
+    def update(dt):
+        # Trigger redraw when animation is playing
+        if viewer and viewer.anim_playing:
+            pass  # on_draw handles the timing
+
+    pyglet.clock.schedule_interval(update, 1/60.0)
     pyglet.app.run()
 
 
