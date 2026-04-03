@@ -161,8 +161,11 @@ class CityEditor:
         self.building_lines = GPULines()
         self.building_mesh = None
         self.show_buildings = True
-        # Road surfaces between junctions
-        self.road_mesh = None
+        # Road surfaces between junctions (separate meshes per layer for polygon offset)
+        self.road_mesh_sidewalk = None
+        self.road_mesh_junction = None
+        self.road_mesh_road = None
+        self.road_mesh_crosswalk = None
         self.show_roads = True
         # Junction/connection lines
         self.junction_lines = GPULines()
@@ -336,12 +339,53 @@ class CityEditor:
         self.building_lines.upload(line_verts)
         print(f"  Building outlines: {len(c.segments)} shapes ({len(line_verts)//12} line segments)")
 
+    def _load_city_texture(self, name):
+        """Load a texture from Textures/City/ by name (without extension)."""
+        city_tex_dir = os.path.join(self.game_root, 'Textures', 'City')
+        path = os.path.join(city_tex_dir, name + '.dds')
+        if not os.path.exists(path):
+            # Case-insensitive fallback
+            try:
+                for entry in os.listdir(city_tex_dir):
+                    if entry.lower() == (name + '.dds').lower():
+                        path = os.path.join(city_tex_dir, entry)
+                        break
+            except OSError:
+                return 0
+        if not os.path.exists(path):
+            return 0
+        try:
+            from PIL import Image
+            img = Image.open(path)
+            if img.mode != 'RGBA':
+                img = img.convert('RGBA')
+            raw = img.tobytes()
+            tid = gl.GLuint()
+            gl.glGenTextures(1, ctypes.byref(tid))
+            gl.glBindTexture(gl.GL_TEXTURE_2D, tid.value)
+            gl.glTexParameteri(gl.GL_TEXTURE_2D, gl.GL_TEXTURE_MIN_FILTER, gl.GL_LINEAR_MIPMAP_LINEAR)
+            gl.glTexParameteri(gl.GL_TEXTURE_2D, gl.GL_TEXTURE_MAG_FILTER, gl.GL_LINEAR)
+            gl.glTexParameteri(gl.GL_TEXTURE_2D, gl.GL_TEXTURE_WRAP_S, gl.GL_REPEAT)
+            gl.glTexParameteri(gl.GL_TEXTURE_2D, gl.GL_TEXTURE_WRAP_T, gl.GL_REPEAT)
+            gl.glTexImage2D(gl.GL_TEXTURE_2D, 0, gl.GL_RGBA8, img.width, img.height,
+                            0, gl.GL_RGBA, gl.GL_UNSIGNED_BYTE, raw)
+            gl.glGenerateMipmap(gl.GL_TEXTURE_2D)
+            gl.glBindTexture(gl.GL_TEXTURE_2D, 0)
+            return tid.value
+        except Exception as e:
+            print(f"  Warning: city texture '{name}': {e}")
+            return 0
+
     def _build_extruded_buildings(self):
         """Extrude building footprint polylines into 3D box buildings with walls and roof."""
         c = self.city
-        positions = []
-        normals = []
-        uvs = []
+
+        # Load building textures
+        wall_tex = self._load_city_texture('t1_middle1')
+        roof_tex = self._load_city_texture('roof')
+
+        wall_pos, wall_nrm, wall_uv = [], [], []
+        roof_pos, roof_nrm, roof_uv = [], [], []
 
         import random as _rand
 
@@ -351,94 +395,123 @@ class CityEditor:
             if n < 3:
                 continue
 
-            # Seed RNG from segment ID for deterministic buildings (matches game logic)
             _rand.seed(seg.id)
 
-            # Compute footprint area to determine building height
-            # (simplified version of game's area calculation)
             gl_verts = [d3d_to_gl(*v) for v in verts]
             min_x = min(v[0] for v in gl_verts)
             max_x = max(v[0] for v in gl_verts)
             min_z = min(v[2] for v in gl_verts)
             max_z = max(v[2] for v in gl_verts)
-            footprint_size = math.sqrt((max_x - min_x) * (max_z - min_z))
+            footprint_size = math.sqrt(max(1, (max_x - min_x) * (max_z - min_z)))
 
-            # Height varies by type and footprint size
-            base_y = gl_verts[0][1]  # use first vertex Y as ground level
+            base_y = gl_verts[0][1]
             if seg.road_type == 0:
-                # Normal buildings — taller, variable height
                 height = footprint_size * (0.5 + _rand.random() * 1.5)
                 height = max(800, min(height, footprint_size * 4))
             elif seg.road_type == 1:
-                # Minor structures — shorter
                 height = footprint_size * (0.3 + _rand.random() * 0.5)
                 height = max(400, min(height, 2000))
             else:
-                # Type 3 — special/large
                 height = footprint_size * (0.8 + _rand.random() * 2.0)
                 height = max(1000, min(height, footprint_size * 5))
 
             top_y = base_y + height
 
-            # Build walls: for each edge of the footprint, create a vertical quad
+            # Walls
             edge_count = n if seg.is_closed else n - 1
             for i in range(edge_count):
                 j = (i + 1) % n
-                bx0, by0, bz0 = gl_verts[i]
-                bx1, by1, bz1 = gl_verts[j]
+                bx0, _, bz0 = gl_verts[i]
+                bx1, _, bz1 = gl_verts[j]
 
-                # Wall quad: 4 corners
-                bl = (bx0, base_y, bz0)    # bottom-left
-                br = (bx1, base_y, bz1)    # bottom-right
-                tl = (bx0, top_y, bz0)     # top-left
-                tr = (bx1, top_y, bz1)     # top-right
-
-                # Compute wall normal (outward facing)
+                bl = (bx0, base_y, bz0)
+                br = (bx1, base_y, bz1)
+                tl = (bx0, top_y, bz0)
+                tr = (bx1, top_y, bz1)
                 wall_n = compute_face_normal(bl, br, tr)
 
-                # Triangle 1: bl, br, tr
-                positions.extend([*bl, *br, *tr])
-                normals.extend([*wall_n, *wall_n, *wall_n])
-                # UV: edge length mapped to U, height to V
-                edge_len = math.sqrt((bx1-bx0)**2 + (bz1-bz0)**2)
-                u_scale = edge_len / 1000.0  # tile every 1000 units
-                uvs.extend([0, 0, u_scale, 0, u_scale, 1])
+                edge_len = math.sqrt((bx1 - bx0)**2 + (bz1 - bz0)**2)
+                u_scale = edge_len / 1000.0
+                v_scale = height / 1000.0
 
-                # Triangle 2: bl, tr, tl
-                positions.extend([*bl, *tr, *tl])
-                normals.extend([*wall_n, *wall_n, *wall_n])
-                uvs.extend([0, 0, u_scale, 1, 0, 1])
+                wall_pos.extend([*bl, *br, *tr])
+                wall_nrm.extend([*wall_n, *wall_n, *wall_n])
+                wall_uv.extend([0, 0, u_scale, 0, u_scale, v_scale])
 
-            # Build roof (flat polygon) — triangulate by fan from first vertex
+                wall_pos.extend([*bl, *tr, *tl])
+                wall_nrm.extend([*wall_n, *wall_n, *wall_n])
+                wall_uv.extend([0, 0, u_scale, v_scale, 0, v_scale])
+
+            # Roof
             if seg.is_closed and n >= 3:
                 roof_n = (0.0, 1.0, 0.0)
                 v0 = (gl_verts[0][0], top_y, gl_verts[0][2])
+                span_x = max_x - min_x if max_x > min_x else 1
+                span_z = max_z - min_z if max_z > min_z else 1
                 for i in range(1, n - 1):
                     v1 = (gl_verts[i][0], top_y, gl_verts[i][2])
-                    v2 = (gl_verts[i+1][0], top_y, gl_verts[i+1][2])
-                    positions.extend([*v0, *v1, *v2])
-                    normals.extend([*roof_n, *roof_n, *roof_n])
-                    uvs.extend([0, 0, 1, 0, 1, 1])
+                    v2 = (gl_verts[i + 1][0], top_y, gl_verts[i + 1][2])
+                    roof_pos.extend([*v0, *v1, *v2])
+                    roof_nrm.extend([*roof_n, *roof_n, *roof_n])
+                    roof_uv.extend([
+                        (v0[0] - min_x) / span_x, (v0[2] - min_z) / span_z,
+                        (v1[0] - min_x) / span_x, (v1[2] - min_z) / span_z,
+                        (v2[0] - min_x) / span_x, (v2[2] - min_z) / span_z,
+                    ])
 
-        if not positions:
+        all_pos = wall_pos + roof_pos
+        all_nrm = wall_nrm + roof_nrm
+        all_uv = wall_uv + roof_uv
+
+        if not all_pos:
             return
 
+        wall_count = len(wall_pos) // 3
+        roof_count = len(roof_pos) // 3
+        mat_groups = []
+        if wall_count:
+            mat_groups.append((wall_tex, 0, wall_count))
+        if roof_count:
+            mat_groups.append((roof_tex, wall_count, roof_count))
+
         mesh = GPUMesh()
-        mesh.vertex_count = len(positions) // 3
-        mesh.mat_groups = [(0, 0, mesh.vertex_count)]
-        mesh._upload(positions, normals, uvs)
+        mesh.vertex_count = len(all_pos) // 3
+        mesh.mat_groups = mat_groups
+        mesh._upload(all_pos, all_nrm, all_uv)
         self.building_mesh = mesh
-        print(f"  Extruded buildings: {mesh.vertex_count} vertices from {len(c.segments)} shapes")
+        print(f"  Extruded buildings: {mesh.vertex_count} vertices from {len(c.segments)} shapes, "
+              f"wall_tex={'yes' if wall_tex else 'no'}, roof_tex={'yes' if roof_tex else 'no'}")
 
     def _build_road_surfaces(self):
-        """Build road surfaces between connected junctions as flat strips."""
+        """Build road + sidewalk + junction fill + crosswalk surfaces."""
         c = self.city
-        positions = []
-        normals = []
-        uvs = []
-        up = (0.0, 1.0, 0.0)
-        road_half_width = 400.0  # game units
+        road_tex = self._load_city_texture('road')
+        pavement_tex = self._load_city_texture('crossing')  # sidewalk/pavement
+        crosswalk_tex = self._load_city_texture('zebra')
 
+        road_pos, road_nrm, road_uv = [], [], []
+        side_pos, side_nrm, side_uv = [], [], []
+        junc_pos, junc_nrm, junc_uv = [], [], []
+        cross_pos, cross_nrm, cross_uv = [], [], []
+        up = (0.0, 1.0, 0.0)
+        road_hw = 400.0      # road half-width
+        sidewalk_w = 200.0   # sidewalk width on each side
+        total_hw = road_hw + sidewalk_w
+        # All layers at same small Y offset; z-fighting solved via glPolygonOffset at draw time
+        y_sidewalk = 5.0
+        y_junc = 5.0
+        y_road = 5.0
+        y_cross = 6.0
+
+        # Build per-junction connection data for junction fills
+        junc_connections = {}  # junction_idx -> list of (other_junction_idx, conn)
+        for conn in c.connections:
+            ia, ib = conn.junction_idx_a, conn.junction_idx_b
+            if ia < len(c.junctions) and ib < len(c.junctions):
+                junc_connections.setdefault(ia, []).append(ib)
+                junc_connections.setdefault(ib, []).append(ia)
+
+        # ── Road strips + sidewalks ───────────────────────────────
         for conn in c.connections:
             ia, ib = conn.junction_idx_a, conn.junction_idx_b
             if ia >= len(c.junctions) or ib >= len(c.junctions):
@@ -449,7 +522,6 @@ class CityEditor:
             ax, ay, az = d3d_to_gl(*pa)
             bx, by, bz = d3d_to_gl(*pb)
 
-            # Direction vector
             dx = bx - ax
             dz = bz - az
             ln = math.sqrt(dx * dx + dz * dz)
@@ -458,37 +530,146 @@ class CityEditor:
             dx /= ln
             dz /= ln
 
-            # Perpendicular (in XZ plane)
-            px, pz = -dz, dx
-            hw = road_half_width
+            px, pz = -dz, dx  # perpendicular
+            u_len = ln / 2000.0
 
-            # Four corners of the road strip
-            l0 = (ax + px * hw, ay + 5, az + pz * hw)
-            r0 = (ax - px * hw, ay + 5, az - pz * hw)
-            l1 = (bx + px * hw, by + 5, bz + pz * hw)
-            r1 = (bx - px * hw, by + 5, bz - pz * hw)
+            # Road surface (center strip)
+            for hw, yoff, pos_list, nrm_list, uv_list in [
+                (road_hw, y_road, road_pos, road_nrm, road_uv),
+            ]:
+                l0 = (ax + px*hw, ay + yoff, az + pz*hw)
+                r0 = (ax - px*hw, ay + yoff, az - pz*hw)
+                l1 = (bx + px*hw, by + yoff, bz + pz*hw)
+                r1 = (bx - px*hw, by + yoff, bz - pz*hw)
+                pos_list.extend([*l0, *r0, *r1])
+                nrm_list.extend([*up, *up, *up])
+                uv_list.extend([0, 0, 1, 0, 1, u_len])
+                pos_list.extend([*l0, *r1, *l1])
+                nrm_list.extend([*up, *up, *up])
+                uv_list.extend([0, 0, 1, u_len, 0, u_len])
 
-            u_len = ln / 2000.0  # tile texture every 2000 units
+            # Left sidewalk strip
+            sl0 = (ax + px*total_hw, ay + y_sidewalk, az + pz*total_hw)
+            sl1 = (ax + px*road_hw, ay + y_sidewalk, az + pz*road_hw)
+            sl2 = (bx + px*total_hw, by + y_sidewalk, bz + pz*total_hw)
+            sl3 = (bx + px*road_hw, by + y_sidewalk, bz + pz*road_hw)
+            side_pos.extend([*sl0, *sl1, *sl3])
+            side_nrm.extend([*up, *up, *up])
+            side_uv.extend([0, 0, 1, 0, 1, u_len])
+            side_pos.extend([*sl0, *sl3, *sl2])
+            side_nrm.extend([*up, *up, *up])
+            side_uv.extend([0, 0, 1, u_len, 0, u_len])
 
-            # Triangle 1: l0, r0, r1
-            positions.extend([*l0, *r0, *r1])
-            normals.extend([*up, *up, *up])
-            uvs.extend([0, 0, 1, 0, 1, u_len])
+            # Right sidewalk strip
+            sr0 = (ax - px*road_hw, ay + y_sidewalk, az - pz*road_hw)
+            sr1 = (ax - px*total_hw, ay + y_sidewalk, az - pz*total_hw)
+            sr2 = (bx - px*road_hw, by + y_sidewalk, bz - pz*road_hw)
+            sr3 = (bx - px*total_hw, by + y_sidewalk, bz - pz*total_hw)
+            side_pos.extend([*sr0, *sr1, *sr3])
+            side_nrm.extend([*up, *up, *up])
+            side_uv.extend([0, 0, 1, 0, 1, u_len])
+            side_pos.extend([*sr0, *sr3, *sr2])
+            side_nrm.extend([*up, *up, *up])
+            side_uv.extend([0, 0, 1, u_len, 0, u_len])
 
-            # Triangle 2: l0, r1, l1
-            positions.extend([*l0, *r1, *l1])
-            normals.extend([*up, *up, *up])
-            uvs.extend([0, 0, 1, u_len, 0, u_len])
+        # ── Junction fills (flat polygon at each junction covering the gap) ──
+        for ji, neighbors in junc_connections.items():
+            if len(neighbors) < 2:
+                continue
+            jpos = c.junctions[ji].position
+            jx, jy, jz = d3d_to_gl(*jpos)
+            jy += y_junc
 
-        if not positions:
-            return
+            # Collect edge points where roads meet the junction
+            edge_pts = []
+            for ni in neighbors:
+                npos = c.junctions[ni].position
+                nx, ny, nz = d3d_to_gl(*npos)
+                ddx = nx - jx
+                ddz = nz - jz
+                ln = math.sqrt(ddx*ddx + ddz*ddz)
+                if ln < 1e-6:
+                    continue
+                ddx /= ln
+                ddz /= ln
+                ppx, ppz = -ddz, ddx
+                # Two edge points at total_hw from center
+                edge_pts.append((jx + ppx*total_hw, jy, jz + ppz*total_hw))
+                edge_pts.append((jx - ppx*total_hw, jy, jz - ppz*total_hw))
 
-        mesh = GPUMesh()
-        mesh.vertex_count = len(positions) // 3
-        mesh.mat_groups = [(0, 0, mesh.vertex_count)]
-        mesh._upload(positions, normals, uvs)
-        self.road_mesh = mesh
-        print(f"  Road surfaces: {mesh.vertex_count} vertices from {len(c.connections)} connections")
+            if len(edge_pts) < 3:
+                continue
+
+            # Sort edge points by angle around junction center
+            import math as _m
+            edge_pts.sort(key=lambda p: _m.atan2(p[2] - jz, p[0] - jx))
+
+            # Fan triangulate the junction polygon
+            v0 = (jx, jy, jz)
+            for i in range(len(edge_pts)):
+                v1 = edge_pts[i]
+                v2 = edge_pts[(i + 1) % len(edge_pts)]
+                junc_pos.extend([*v0, *v1, *v2])
+                junc_nrm.extend([*up, *up, *up])
+                junc_uv.extend([0.5, 0.5, 0, 0, 1, 0])
+
+        # ── Crosswalks at junctions with 2+ connections ──────────
+        for ji, neighbors in junc_connections.items():
+            if len(neighbors) < 2:
+                continue
+            jpos = c.junctions[ji].position
+            jx, jy, jz = d3d_to_gl(*jpos)
+            jy += y_cross
+
+            for ni in neighbors:
+                npos = c.junctions[ni].position
+                nx, _, nz = d3d_to_gl(*npos)
+                ddx = nx - jx
+                ddz = nz - jz
+                ln = math.sqrt(ddx*ddx + ddz*ddz)
+                if ln < 1e-6:
+                    continue
+                ddx /= ln
+                ddz /= ln
+                ppx, ppz = -ddz, ddx
+
+                # Crosswalk strip perpendicular to road, offset from junction center
+                cw_dist = total_hw * 0.8  # distance from junction center
+                cw_hw = road_hw  # crosswalk width = road width
+                cw_depth = 150.0  # crosswalk depth along road
+
+                cx = jx + ddx * cw_dist
+                cz = jz + ddz * cw_dist
+
+                cl0 = (cx + ppx*cw_hw - ddx*cw_depth*0.5, jy, cz + ppz*cw_hw - ddz*cw_depth*0.5)
+                cr0 = (cx - ppx*cw_hw - ddx*cw_depth*0.5, jy, cz - ppz*cw_hw - ddz*cw_depth*0.5)
+                cl1 = (cx + ppx*cw_hw + ddx*cw_depth*0.5, jy, cz + ppz*cw_hw + ddz*cw_depth*0.5)
+                cr1 = (cx - ppx*cw_hw + ddx*cw_depth*0.5, jy, cz - ppz*cw_hw + ddz*cw_depth*0.5)
+
+                cross_pos.extend([*cl0, *cr0, *cr1])
+                cross_nrm.extend([*up, *up, *up])
+                cross_uv.extend([0, 0, 1, 0, 1, 1])
+                cross_pos.extend([*cl0, *cr1, *cl1])
+                cross_nrm.extend([*up, *up, *up])
+                cross_uv.extend([0, 0, 1, 1, 0, 1])
+
+        # ── Build separate meshes per layer (for polygon offset z-fight fix) ──
+        def _make_mesh(pos, nrm, uv, tex):
+            if not pos:
+                return None
+            m = GPUMesh()
+            m.vertex_count = len(pos) // 3
+            m.mat_groups = [(tex, 0, m.vertex_count)]
+            m._upload(pos, nrm, uv)
+            return m
+
+        self.road_mesh_sidewalk = _make_mesh(side_pos, side_nrm, side_uv, pavement_tex)
+        self.road_mesh_junction = _make_mesh(junc_pos, junc_nrm, junc_uv, pavement_tex)
+        self.road_mesh_road = _make_mesh(road_pos, road_nrm, road_uv, road_tex)
+        self.road_mesh_crosswalk = _make_mesh(cross_pos, cross_nrm, cross_uv, crosswalk_tex)
+
+        rc = len(road_pos)//3; sc = len(side_pos)//3; jc = len(junc_pos)//3; cc = len(cross_pos)//3
+        print(f"  Road system: {rc} road + {sc} sidewalk + {jc} junction + {cc} crosswalk verts")
 
     def _build_junction_markers(self):
         """Build point markers for junctions."""
@@ -529,16 +710,16 @@ class CityEditor:
             loaded.add(mp.model_name)
 
             # Build model matrix: the .city transform is D3D row-major
-            # Convert to OpenGL column-major with X negation
+            # Convert to OpenGL column-major: transpose, then apply X-negation
+            # for handedness change (D3D LH → OpenGL RH).
+            # Transpose: GL col[i] = D3D row[i] → col[j][i] = row[i][j]
+            # X-negate: negate column 0 and position X
             t = mp.transform
-            # D3D row-major to column-major (transpose), then negate X axis
-            # Row 0 (right):  negate for handedness
-            # Row 3 (pos):    negate X component
             col_major = [
-                -t[0][0], t[0][1], t[0][2], t[0][3],  # col 0 (negated right)
-                -t[1][0], t[1][1], t[1][2], t[1][3],  # col 1
-                -t[2][0], t[2][1], t[2][2], t[2][3],   # col 2
-                -t[3][0], t[3][1], t[3][2], t[3][3],  # col 3 (position, X negated)
+                -t[0][0], -t[1][0], -t[2][0],  0,  # col 0: X-negated
+                 t[0][1],  t[1][1],  t[2][1],  0,  # col 1: Y
+                 t[0][2],  t[1][2],  t[2][2],  0,  # col 2: Z
+                -t[3][0],  t[3][1],  t[3][2],  1,  # col 3: position
             ]
 
             self.model_instances.append((gpu_mesh, col_major))
@@ -660,12 +841,37 @@ class CityEditor:
             self.terrain_mesh.draw(self.mesh_program, self.u_has_tex)
             gl.glEnable(gl.GL_CULL_FACE)
 
-        # Road surfaces between junctions
-        if self.show_roads and self.road_mesh:
+        # Road system layers — drawn with glPolygonOffset to prevent z-fighting
+        if self.show_roads:
             gl.glDisable(gl.GL_CULL_FACE)
+            gl.glEnable(gl.GL_POLYGON_OFFSET_FILL)
             set_mat4(self.u_model, identity)
-            gl.glUniform4f(self.u_base_color, 0.45, 0.43, 0.40, 1.0)
-            self.road_mesh.draw(self.mesh_program, self.u_has_tex)
+
+            # Layer 0: sidewalks (farthest from camera in depth)
+            if self.road_mesh_sidewalk:
+                gl.glPolygonOffset(-1.0, -1.0)
+                gl.glUniform4f(self.u_base_color, 0.55, 0.50, 0.42, 1.0)
+                self.road_mesh_sidewalk.draw(self.mesh_program, self.u_has_tex)
+
+            # Layer 1: junction fills
+            if self.road_mesh_junction:
+                gl.glPolygonOffset(-2.0, -2.0)
+                gl.glUniform4f(self.u_base_color, 0.50, 0.48, 0.40, 1.0)
+                self.road_mesh_junction.draw(self.mesh_program, self.u_has_tex)
+
+            # Layer 2: road surface
+            if self.road_mesh_road:
+                gl.glPolygonOffset(-3.0, -3.0)
+                gl.glUniform4f(self.u_base_color, 0.45, 0.43, 0.40, 1.0)
+                self.road_mesh_road.draw(self.mesh_program, self.u_has_tex)
+
+            # Layer 3: crosswalks (closest to camera)
+            if self.road_mesh_crosswalk:
+                gl.glPolygonOffset(-4.0, -4.0)
+                gl.glUniform4f(self.u_base_color, 0.9, 0.9, 0.85, 1.0)
+                self.road_mesh_crosswalk.draw(self.mesh_program, self.u_has_tex)
+
+            gl.glDisable(gl.GL_POLYGON_OFFSET_FILL)
             gl.glEnable(gl.GL_CULL_FACE)
 
         # Extruded buildings (procedural shapes from .city segments)

@@ -3,3 +3,9 @@
 /decomp/ida pro
 blender/io_import_autothief.zip
 /decomp/ghidra
+
+# Build output
+/build/
+/src/stubs/stub_functions.cpp
+/src/stubs/stub_test.cpp
+/src/include/autothief.h

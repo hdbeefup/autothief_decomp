@@ -173,6 +173,54 @@ class ALFAnimation:
         return anim
 
 
+# ── COL collision parser ───────────────────────────────────────────────────
+
+class COLBox:
+    __slots__ = ('min_pos', 'max_pos', 'face_count')
+    def __init__(self, min_pos, max_pos, face_count):
+        self.min_pos = min_pos  # (x, y, z)
+        self.max_pos = max_pos  # (x, y, z)
+        self.face_count = face_count
+
+class COLModel:
+    __slots__ = ('boxes',)
+
+    @staticmethod
+    def load(filepath):
+        col = COLModel()
+        col.boxes = []
+        with open(filepath, 'rb') as f:
+            header = f.read(0x44)
+            if len(header) < 0x44:
+                return col
+            count = struct.unpack_from('<I', header, 0)[0]
+            for _ in range(count):
+                entry = f.read(0x24)
+                if len(entry) < 0x24:
+                    break
+                face_count = struct.unpack_from('<I', entry, 0)[0]
+                mn = struct.unpack_from('<fff', entry, 4)
+                mx = struct.unpack_from('<fff', entry, 16)
+                # Convert to viewer coords: negate X
+                col.boxes.append(COLBox((-mn[0], mn[1], mn[2]),
+                                        (-mx[0], mx[1], mx[2]),
+                                        face_count))
+                # Skip face data: face_count * 16 bytes + face_count * 1 byte
+                if face_count > 0:
+                    f.read(face_count * 0x10 + face_count)
+        return col
+
+
+def find_col_file(pm_path):
+    """Find .col file matching a .pm file."""
+    stem = os.path.splitext(pm_path)[0]
+    for ext in ('.col', '.COL'):
+        path = stem + ext
+        if os.path.exists(path):
+            return path
+    return None
+
+
 def find_animations(pm_path):
     """Find matching animation folder for a .pm model file.
     Returns (character_name, {anim_name: filepath}) or (None, {}).
@@ -465,7 +513,14 @@ class PMViewer:
         self.helper_vao = 0
         self.helper_vbo = 0
         self.helper_vert_count = 0
-        self.helper_labels = []      # list of pyglet.text.Label
+        self.helper_labels = []
+
+        # Collision visualization
+        self.show_collision = True
+        self.col_model = None
+        self.col_vao = 0
+        self.col_vbo = 0
+        self.col_vert_count = 0
 
         # Compile shaders
         self._compile_shaders()
@@ -597,6 +652,67 @@ class PMViewer:
         print(f"  Helpers: {len(self.model.helpers)}")
         for hname, hx, hy, hz in self.model.helpers:
             print(f"    {hname}: ({hx:.1f}, {hy:.1f}, {hz:.1f})")
+
+    def _load_collision(self):
+        """Auto-detect and load .col file for the current model."""
+        col_path = find_col_file(self.pm_path)
+        if not col_path:
+            self.col_model = None
+            return
+        self.col_model = COLModel.load(col_path)
+        print(f"  Collision: {len(self.col_model.boxes)} boxes from {os.path.basename(col_path)}")
+        self._build_collision_geometry()
+
+    def _build_collision_geometry(self):
+        """Build wireframe box geometry for collision data."""
+        if not self.col_model or not self.col_model.boxes:
+            self.col_vert_count = 0
+            return
+
+        verts = []
+        r, g, b = 1.0, 0.8, 0.1  # yellow
+
+        for box in self.col_model.boxes:
+            x0, y0, z0 = box.min_pos
+            x1, y1, z1 = box.max_pos
+            # Ensure min < max per axis
+            if x0 > x1: x0, x1 = x1, x0
+            if y0 > y1: y0, y1 = y1, y0
+            if z0 > z1: z0, z1 = z1, z0
+            # 12 edges of a box = 24 vertices
+            edges = [
+                (x0,y0,z0, x1,y0,z0), (x0,y1,z0, x1,y1,z0),
+                (x0,y0,z1, x1,y0,z1), (x0,y1,z1, x1,y1,z1),
+                (x0,y0,z0, x0,y1,z0), (x1,y0,z0, x1,y1,z0),
+                (x0,y0,z1, x0,y1,z1), (x1,y0,z1, x1,y1,z1),
+                (x0,y0,z0, x0,y0,z1), (x1,y0,z0, x1,y0,z1),
+                (x0,y1,z0, x0,y1,z1), (x1,y1,z0, x1,y1,z1),
+            ]
+            for ax, ay, az, bx, by, bz in edges:
+                verts.extend([ax, ay, az, r, g, b])
+                verts.extend([bx, by, bz, r, g, b])
+
+        self.col_vert_count = len(verts) // 6
+
+        if not self.col_vao:
+            vao = gl.GLuint()
+            gl.glGenVertexArrays(1, ctypes.byref(vao))
+            self.col_vao = vao.value
+            vbo = gl.GLuint()
+            gl.glGenBuffers(1, ctypes.byref(vbo))
+            self.col_vbo = vbo.value
+
+        gl.glBindVertexArray(self.col_vao)
+        gl.glBindBuffer(gl.GL_ARRAY_BUFFER, self.col_vbo)
+        data = (gl.GLfloat * len(verts))(*verts)
+        gl.glBufferData(gl.GL_ARRAY_BUFFER, ctypes.sizeof(data), data, gl.GL_STATIC_DRAW)
+        stride = 6 * 4
+        gl.glVertexAttribPointer(0, 3, gl.GL_FLOAT, gl.GL_FALSE, stride, None)
+        gl.glEnableVertexAttribArray(0)
+        offset_ptr = ctypes.c_void_p(3 * 4)
+        gl.glVertexAttribPointer(1, 3, gl.GL_FLOAT, gl.GL_FALSE, stride, offset_ptr)
+        gl.glEnableVertexAttribArray(1)
+        gl.glBindVertexArray(0)
 
     def _compute_bone_assignments(self):
         """Assign each model vertex to its nearest bone using frame 0 positions."""
@@ -745,6 +861,8 @@ class PMViewer:
         fname = os.path.basename(self.pm_path)
         m = self.model
         info = f"{fname}  |  {len(m.vertices)} verts, {len(m.triangles)} tris, {len(m.materials)} mats, {len(m.helpers)} helpers"
+        if self.col_model:
+            info += f", {len(self.col_model.boxes)} col boxes"
         if self.anim_names:
             anim_name = self.anim_names[self.current_anim_idx] if self.current_anim_idx >= 0 else "none"
             status = "playing" if self.anim_playing else "paused"
@@ -755,7 +873,13 @@ class PMViewer:
                 frame = int(self.anim_time) if self.current_anim else 0
                 total = self.current_anim.frame_count if self.current_anim else 0
                 info += f"  {status}  frame {frame}/{total}"
-            info += f"\n[A/D] prev/next anim  [Space] play/pause  [S] skeleton  [H] helpers"
+        # Always show controls
+        controls = "[W] wireframe  [R] reset  [H] helpers"
+        if self.col_model:
+            controls += "  [C] collision"
+        if self.anim_names:
+            controls += "\n[A/D] prev/next  [Space] play/pause  [,/.] frame step  [S] skeleton"
+        info += f"\n{controls}"
         self.info_label.text = info
         self.info_label.width = self.window.width - 16
 
@@ -951,9 +1075,10 @@ class PMViewer:
         self.vertex_count = len(positions) // 3
         print(f"  Total render vertices: {self.vertex_count}")
 
-        # Discover animations
+        # Discover animations, helpers, collision
         self._discover_animations()
         self._build_helper_geometry()
+        self._load_collision()
         self._update_info_label()
 
         # Compute bounding sphere
@@ -1106,6 +1231,17 @@ class PMViewer:
             gl.glBindVertexArray(0)
             gl.glUseProgram(0)
 
+        # Draw collision wireframe
+        if self.show_collision and self.col_vao and self.col_vert_count:
+            gl.glUseProgram(self.skel_program)
+            gl.glUniformMatrix4fv(self.su_projection, 1, gl.GL_FALSE, proj_arr)
+            gl.glUniformMatrix4fv(self.su_view, 1, gl.GL_FALSE, view_arr)
+            gl.glBindVertexArray(self.col_vao)
+            gl.glLineWidth(1.0)
+            gl.glDrawArrays(gl.GL_LINES, 0, self.col_vert_count)
+            gl.glBindVertexArray(0)
+            gl.glUseProgram(0)
+
         # Draw info text overlay and helper labels
         gl.glDisable(gl.GL_DEPTH_TEST)
         gl.glDisable(gl.GL_CULL_FACE)
@@ -1188,6 +1324,8 @@ class PMViewer:
             self.show_skeleton = not self.show_skeleton
         elif symbol == pyglet.window.key.H:
             self.show_helpers = not self.show_helpers
+        elif symbol == pyglet.window.key.C:
+            self.show_collision = not self.show_collision
         elif symbol == pyglet.window.key.SPACE:
             if self.current_anim:
                 self.anim_playing = not self.anim_playing
@@ -1202,6 +1340,22 @@ class PMViewer:
             if self.anim_names:
                 idx = (self.current_anim_idx - 1) % len(self.anim_names)
                 self._load_animation(idx)
+        elif symbol == pyglet.window.key.PERIOD:
+            # Step forward 1 frame
+            if self.current_anim:
+                self.anim_playing = False
+                self.anim_time = (int(self.anim_time) + 1) % max(1, self.current_anim.frame_count)
+                self._update_skeleton_geometry(self.anim_time)
+                self._deform_mesh(self.anim_time)
+                self._update_info_label()
+        elif symbol == pyglet.window.key.COMMA:
+            # Step backward 1 frame
+            if self.current_anim:
+                self.anim_playing = False
+                self.anim_time = (int(self.anim_time) - 1) % max(1, self.current_anim.frame_count)
+                self._update_skeleton_geometry(self.anim_time)
+                self._deform_mesh(self.anim_time)
+                self._update_info_label()
 
     def _reset_camera(self):
         self.yaw = 0.0
@@ -1245,6 +1399,15 @@ class PMViewer:
             gl.glDeleteBuffers(1, ctypes.byref(buf))
             self.helper_vbo = 0
         self.helper_labels = []
+        # Clean up collision GL objects
+        if self.col_vao:
+            vao = gl.GLuint(self.col_vao)
+            gl.glDeleteVertexArrays(1, ctypes.byref(vao))
+            self.col_vao = 0
+        if self.col_vbo:
+            buf = gl.GLuint(self.col_vbo)
+            gl.glDeleteBuffers(1, ctypes.byref(buf))
+            self.col_vbo = 0
         # Clear texture cache
         for tid in self.tex_cache.values():
             if tid:

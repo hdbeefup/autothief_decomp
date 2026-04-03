@@ -431,7 +431,7 @@ class OrbitCamera:
         self.pitch = 0.5
         self.distance = 5000.0
         self.center = [0.0, 0.0, 0.0]
-        self.near = 1.0
+        self.near = 100.0
         self.far = 100000.0
         self.fov = 60
         # Key movement state
@@ -464,7 +464,8 @@ class OrbitCamera:
         return Mat4.perspective_projection(aspect, self.near, self.far, self.fov)
 
     def orbit(self, dx, dy):
-        self.yaw += dx * 0.01
+        # FPS-style: mouse left = look left (negate dx)
+        self.yaw -= dx * 0.01
         self.pitch += dy * 0.01
         self.pitch = max(-math.pi / 2 + 0.01, min(math.pi / 2 - 0.01, self.pitch))
 

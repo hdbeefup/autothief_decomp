@@ -1,0 +1,1 @@
+python -m city_editor "N:\GamesRE\CarJacker\City\sanjose.city" "N:\GamesRE\CarJacker"

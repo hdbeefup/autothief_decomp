@@ -158,37 +158,158 @@ These are standard library functions already identified by IDA Pro's FLIRT signa
 
 ---
 
-## Lua 4.0 VM (matched by error strings via harvest_symbols.py)
+## Lua 4.0.1 VM (deep match via lua_match.py against Lua 4.0.1 source)
 
-Functions currently mis-classified in "compression" module — these are Lua 4.0 VM internals.
+**136 functions matched** (115 confirmed, 21 likely). Multiple addresses matching the same name
+indicate inlined copies or compiler-duplicated code. Address range 0x0041xxxx–0x0041Cxxx is the
+main Lua VM block; 0x0044xxxx–0x0045xxxx are game-side Lua wrappers; 0x0054xxxx–0x0055xxxx are
+the Lua standard libraries (io, string, math, debug, base).
 
-| Address | Ghidra | IDA | Name | Confidence | Lua Source | Matched String |
-|---------|--------|-----|------|------------|------------|----------------|
-| 0x00412294 | FUN_00412294 | sub_412294 | luaD_checkstack | confirmed | ldo.c | "stack overflow" |
-| 0x00412DF0 | FUN_00412df0 | sub_412DF0 | luaT_validevent | confirmed | ltm.c | "invalid tag" |
-| 0x004131E0 | FUN_004131e0 | sub_4131E0 | luaH_next | confirmed | lhash.c | "table overflow" |
-| 0x004135A0 | FUN_004135a0 | sub_4135A0 | luaH_next_variant | confirmed | lhash.c | "table overflow" |
-| 0x00413834 | FUN_00413834 | sub_413834 | luaT_settagmethod | confirmed | ltm.c | "tag method must be a function" |
-| 0x00414250 | FUN_00414250 | sub_414250 | luaV_lessthan | confirmed | lvm.c | "attempt to compare two" |
-| 0x004143D0 | FUN_004143d0 | sub_4143D0 | luaV_execute | confirmed | lvm.c | "`for' step must be a number" |
-| 0x00417758 | FUN_00417758 | sub_417758 | luaH_next_variant2 | confirmed | lhash.c | "table overflow" |
-| 0x00417F98 | FUN_00417f98 | sub_417F98 | luaH_set | confirmed | lhash.c | "constant table overflow" |
-| 0x00418B6C | FUN_00418b6c | sub_418B6C | luaH_set_variant | confirmed | lhash.c | "constant table overflow" |
-| 0x0041952C | FUN_0041952c | sub_41952C | luaY_parser | confirmed | lparser.c | "unexpected end of file" |
-| 0x0041AF58 | FUN_0041af58 | sub_41AF58 | luaH_set_variant2 | confirmed | lhash.c | "constant table overflow" |
-| 0x0041C0F0 | FUN_0041c0f0 | sub_41C0F0 | luaY_read_long_string | confirmed | llex.c | "unfinished long string" |
-| 0x0041C334 | FUN_0041c334 | sub_41C334 | luaY_read_string | confirmed | llex.c | "unfinished string" |
-| 0x0042E510 | FUN_0042e510 | sub_42E510 | luaM_realloc | confirmed | lmem.c | "not enough memory" |
-| 0x004A7213 | FUN_004a7213 | sub_4A7213 | luaD_checkstack_2 | confirmed | ldo.c | "stack overflow" |
-| 0x0054B9E0 | FUN_0054b9e0 | sub_54B9E0 | luaM_realloc_2 | confirmed | lmem.c | "not enough memory" |
-| 0x0054BB54 | FUN_0054bb54 | sub_54BB54 | luaM_realloc_3 | confirmed | lmem.c | "not enough memory" |
-| 0x0054C07C | FUN_0054c07c | sub_54C07C | lua_db_line | confirmed | ldblib.c | "lua_debug> " |
-| 0x0054CBFC | FUN_0054cbfc | sub_54CBFC | luaL_check_args | confirmed | lauxlib.c | "wrong number of arguments" |
-| 0x0054F994 | FUN_0054f994 | sub_54F994 | lua_version | confirmed | lstate.c | "Lua 4.0" |
-| 0x0054FD40 | FUN_0054fd40 | sub_54FD40 | luaD_checkstack_3 | confirmed | ldo.c | "stack overflow" |
-| 0x0055029C | FUN_0055029c | sub_55029C | luaL_argerror | confirmed | lauxlib.c | "bad argument" |
+### Lua Core VM (lapi, lcode, ldebug, ldo, llex, lmem, lobject, lparser, lstate, ltable, ltm, lundump, lvm)
 
-Note: Multiple addresses match the same Lua function name (e.g., `luaH_set` appears 3 times). These are likely inlined copies or compiler-duplicated versions. Cross-check against Lua 4.0.1 source to disambiguate.
+| Address | IDA | Name | Confidence | Source | Key Strings |
+|---------|-----|------|------------|--------|-------------|
+| 0x00411F64 | sub_411F64 | luaD_lineHook | confirmed | ldo.c | `line` |
+| 0x00412294 | sub_412294 | luaD_checkstack | confirmed | ldo.c | `stack overflow` |
+| 0x00412564 | sub_412564 | parse_file | confirmed | ldo.c | `(stdin)`, `@` |
+| 0x00412830 | sub_412830 | parse_buffer | confirmed | ldo.c | `?` |
+| 0x00412AE4 | sub_412AE4 | lua_typename | confirmed | lapi.c | `no value` |
+| 0x00412DF0 | sub_412DF0 | lua_pushusertag | confirmed | lapi.c | `invalid tag for a userdata (%d)` |
+| 0x004131E0 | sub_4131E0 | lua_ref | confirmed | lapi.c | `reference table overflow` |
+| 0x00413304 | sub_413304 | lua_settag | confirmed | lapi.c | `cannot change the tag of a %.20s` |
+| 0x00413410 | sub_413410 | lua_getn | confirmed | lapi.c | `n` |
+| 0x004135A0 | sub_4135A0 | lua_newtag | confirmed | ltm.c | `tag table overflow` |
+| 0x004135E4 | sub_4135E4 | luaT_realtag | confirmed | ltm.c | `tag %d was not created by 'newtag'` |
+| 0x0041369C | sub_41369C | checktag | confirmed | ltm.c | `%d is not a valid tag` |
+| 0x00413764 | sub_413764 | luaI_checkevent | confirmed | ltm.c | `event '%.50s' is deprecated`, `'%.50s' is not a valid event name` |
+| 0x00413834 | sub_413834 | lua_settagmethod | confirmed | ltm.c | `tag method must be a function (or nil)`, `cannot change '%.20s' tag method` |
+| 0x00413D50 | sub_413D50 | getobjname | confirmed | ldebug.c | `field`, `global`, `local` |
+| 0x00413F9C | sub_413F9C | getname | confirmed | ldebug.c | `global`, `tag-method` |
+| 0x004141AC | sub_4141AC | funcinfo | confirmed | ldebug.c | `=C`, `C`, `main`, `value for 'lua_getinfo' is not a function` |
+| 0x00414230 | sub_414230 | infoLproto | confirmed | ldebug.c | `Lua` |
+| 0x00414250 | sub_414250 | luaG_ordererror | confirmed | ldebug.c | `attempt to compare two %.10s values` |
+| 0x004142C0 | sub_4142C0 | luaG_typeerror | confirmed | ldebug.c | `attempt to %.30s %.20s '%.40s' (a %.10s value)` |
+| 0x004143D0 | sub_4143D0 | luaV_execute | confirmed | lvm.c | `'for' step/limit/index must be a number` (6 strings) |
+| 0x0041643C | sub_41643C | luaV_strconc | confirmed | lvm.c | `string size overflow` |
+| 0x00416674 | sub_416674 | call_arith | confirmed | lvm.c | `perform arithmetic on` |
+| 0x0041670C | sub_41670C | lua_getn | confirmed | lapi.c | `n` |
+| 0x004170A4 | sub_4170A4 | luaH_next | confirmed | ltable.c | `invalid key for 'next'` |
+| 0x0041716C | sub_41716C | luaH_getany | confirmed | ltable.c | `table index is nil` |
+| 0x004174A4 | sub_4174A4 | luaH_getany | confirmed | ltable.c | `table index is nil` |
+| 0x00417758 | sub_417758 | setnodevector | confirmed | ltable.c | `table overflow` |
+| 0x00417928 | sub_417928 | luaY_parser | confirmed | lparser.c | `<eof> expected` |
+| 0x00417A4C | sub_417A4C | stat | confirmed | lparser.c | `<statement> expected` |
+| 0x00417B70 | sub_417B70 | breakstat | confirmed | lparser.c | `no loop to break` |
+| 0x00417D64 | sub_417D64 | simpleexp | confirmed | lparser.c | `<expression> expected` |
+| 0x00417ED4 | sub_417ED4 | singlevar | confirmed | lparser.c | `cannot access a variable in outer scope` |
+| 0x00417F98 | sub_417F98 | number_constant | confirmed | lcode.c | `constant table overflow` |
+| 0x00417FF0 | sub_417FF0 | pushupvalue | confirmed | lparser.c | `cannot access upvalue in main` |
+| 0x00418074 | sub_418074 | indexupvalue | confirmed | lparser.c | `upvalues` |
+| 0x00418200 | sub_418200 | funcargs | confirmed | lparser.c | `function arguments expected` |
+| 0x004182B8 | sub_4182B8 | constructor | confirmed | lparser.c | `invalid constructor syntax` |
+| 0x004183D4 | sub_4183D4 | listfields | confirmed | lparser.c | `'item groups' in a list initializer` |
+| 0x004185D4 | sub_4185D4 | recfield | confirmed | lparser.c | `<name> or '[' expected` |
+| 0x00418668 | sub_418668 | check_match | confirmed | lparser.c | `'%.20s' expected (to close '%.20s' at line %d)` |
+| 0x00418784 | sub_418784 | body | confirmed | lparser.c | `self` |
+| 0x00418818 | sub_418818 | parlist | confirmed | lparser.c | `<name> or '...' expected` |
+| 0x00418894 | sub_418894 | str_checkname | confirmed | lparser.c | `<name> expected` |
+| 0x004188C4 | sub_4188C4 | new_localvar | confirmed | lparser.c | `local variables` |
+| 0x00418978 | sub_418978 | code_params | confirmed | lparser.c | `arg` |
+| 0x00418B6C | sub_418B6C | number_constant | confirmed | lcode.c | `constant table overflow` |
+| 0x00418D2C | sub_418D2C | assignment | confirmed | lparser.c | `variables in a multiple assignment` |
+| 0x00419040 | sub_419040 | forstat | confirmed | lparser.c | `'=' or ',' expected` |
+| 0x004190C0 | sub_4190C0 | forlist | confirmed | lparser.c | `(table)`, `in` |
+| 0x004191C8 | sub_4191C8 | fornum | confirmed | lparser.c | `(limit)`, `(step)` |
+| 0x00419430 | sub_419430 | error_expected | confirmed | lparser.c | `'%.20s' expected` |
+| 0x0041952C | sub_41952C | unexpectedEOZ | confirmed | lundump.c | `unexpected end of file in '%.99s'` |
+| 0x0041956C | sub_41956C | LoadCode | confirmed | lundump.c | `bad code in '%.99s'` |
+| 0x00419954 | sub_419954 | infoLproto | confirmed | ldebug.c | `Lua` |
+| 0x00419E70 | sub_419E70 | luaM_realloc | confirmed | lmem.c | `memory allocation error: block too big` |
+| 0x0041AAE4 | sub_41AAE4 | luaK_code2 | confirmed | lcode.c | `code size overflow` |
+| 0x0041AE84 | sub_41AE84 | luaK_deltastack | confirmed | lcode.c | `function or expression too complex` |
+| 0x0041AEE4 | sub_41AEE4 | codelineinfo | confirmed | lcode.c | `line info overflow` |
+| 0x0041AF58 | sub_41AF58 | number_constant | confirmed | lcode.c | `constant table overflow` |
+| 0x0041B3D0 | sub_41B3D0 | luaK_fixjump | confirmed | lcode.c | `control structure too long` |
+| 0x0041B960 | sub_41B960 | luaX_lex | confirmed | llex.c | `unexpected '$' (pragmas are no longer supported)` |
+| 0x0041BDB0 | sub_41BDB0 | inclinenumber | confirmed | llex.c | `lines in a chunk` |
+| 0x0041BDFC | sub_41BDFC | luaX_checklimit | confirmed | llex.c | `too many %.50s (limit=%d)` |
+| 0x0041BE38 | sub_41BE38 | read_number | confirmed | llex.c | `malformed number` |
+| 0x0041C0F0 | sub_41C0F0 | read_long_string | confirmed | llex.c | `unfinished long string` |
+| 0x0041C334 | sub_41C334 | read_string | confirmed | llex.c | `unfinished string`, `escape sequence too large` |
+| 0x0041C824 | sub_41C824 | luaX_invalidchar | confirmed | llex.c | `invalid control char` |
+| 0x0054FCAC | sub_54FCAC | errormessage | likely | lstate.c | `(no message)` |
+
+### Lua Standard Libraries (lauxlib, lbaselib, ldblib, liolib, lstrlib, lmathlib)
+
+| Address | IDA | Name | Confidence | Source | Key Strings |
+|---------|-----|------|------------|--------|-------------|
+| 0x0040D0A0 | sub_40D0A0 | io_seek | likely | liolib.c | `set` |
+| 0x0040DAE0 | sub_40DAE0 | io_seek | likely | liolib.c | `set` |
+| 0x00416620 | sub_416620 | io_write | confirmed | liolib.c | `%.16g` |
+| 0x00418CCC | sub_418CCC | passresults | likely | lbaselib.c | `syntax error` |
+| 0x004498E0 | sub_4498E0 | luaB_print | likely | lbaselib.c | `tostring` |
+| 0x004499E0 | sub_4499E0 | luaB_print | likely | lbaselib.c | `tostring` |
+| 0x004561A0 | sub_4561A0 | setloc | likely | liolib.c | `time` |
+| 0x004578F0 | sub_4578F0 | code_params | confirmed | lparser.c | `arg` |
+| 0x004579D0 | sub_4579D0 | code_params | confirmed | lparser.c | `arg` |
+| 0x00457AC0 | sub_457AC0 | code_params | confirmed | lparser.c | `arg` |
+| 0x00457BE0 | sub_457BE0 | code_params | confirmed | lparser.c | `arg` |
+| 0x00457CE0 | sub_457CE0 | code_params | confirmed | lparser.c | `arg` |
+| 0x00457E20 | sub_457E20 | code_params | confirmed | lparser.c | `arg` |
+| 0x004583E0 | sub_4583E0 | luaB_print | likely | lbaselib.c | `tostring` |
+| 0x004A5396 | sub_4A5396 | passresults | likely | lbaselib.c | `syntax error` |
+| 0x004A68DC | sub_4A68DC | passresults | likely | lbaselib.c | `syntax error` |
+| 0x004A7213 | sub_4A7213 | passresults | likely | lbaselib.c | `syntax error` |
+| 0x004A76CC | sub_4A76CC | funcinfo | likely | ldebug.c | `C` |
+| 0x00530870 | sub_530870 | getinfo | likely | ldblib.c | `name` |
+| 0x00530940 | sub_530940 | getinfo | likely | ldblib.c | `name` |
+| 0x00544590 | sub_544590 | getinfo | likely | ldblib.c | `name` |
+| 0x0054AD20 | sub_54AD20 | getinfo | confirmed | ldblib.c | `flnSu`, `source`, `currentline`, `nups`, `name`, `func` (12 strings) |
+| 0x0054AFA8 | sub_54AFA8 | getlocal | confirmed | ldblib.c | `level out of range` |
+| 0x0054B0C0 | sub_54B0C0 | getlocal | confirmed | ldblib.c | `level out of range` |
+| 0x0054B294 | sub_54B294 | sethook | confirmed | ldblib.c | `function expected` |
+| 0x0054B3A0 | sub_54B3A0 | getnonullfile | confirmed | liolib.c | `invalid file handle` |
+| 0x0054B3D4 | sub_54B3D4 | gethandle | confirmed | liolib.c | `cannot access a closed file` |
+| 0x0054B63C | sub_54B63C | getfilebyref | confirmed | liolib.c | `global variable '%.10s' is not a file handle` |
+| 0x0054B730 | sub_54B730 | io_read | likely | liolib.c | `*l`, `invalid format`, `too many arguments` |
+| 0x0054B9E0 | sub_54B9E0 | read_file | confirmed | liolib.c | `not enough memory to read a file` |
+| 0x0054BB54 | sub_54BB54 | read_file | confirmed | liolib.c | `not enough memory to read a file` |
+| 0x0054BBF0 | sub_54BBF0 | io_write | confirmed | liolib.c | `%.16g` |
+| 0x0054BD1C | sub_54BD1C | io_seek | likely | liolib.c | `cur` |
+| 0x0054BE20 | sub_54BE20 | getnonullfile | confirmed | liolib.c | `invalid file handle` |
+| 0x0054BF9C | sub_54BF9C | io_date | confirmed | liolib.c | `%c`, `invalid 'date' format` |
+| 0x0054C018 | sub_54C018 | setloc | likely | liolib.c | `all` |
+| 0x0054C07C | sub_54C07C | io_debug | likely | liolib.c | `lua_debug> ` |
+| 0x0054C134 | sub_54C134 | openwithcontrol | likely | liolib.c | `_STDIN`, `_STDOUT`, `_STDERR` |
+| 0x0054C278 | sub_54C278 | errorfb | likely | liolib.c | `error: `, `stack traceback:\n`, `function '%.50s'` |
+| 0x0054CBFC | sub_54CBFC | math_random | confirmed | lbaselib.c | `interval is empty`, `wrong number of arguments` |
+| 0x0054CFD4 | sub_54CFD4 | lua_mathlibopen | confirmed | lbaselib.c | `PI`, `pow` |
+| 0x0054D390 | sub_54D390 | str_byte | confirmed | lstrlib.c | `out of range` |
+| 0x0054D454 | sub_54D454 | str_char | confirmed | lstrlib.c | `invalid value` |
+| 0x0054D564 | sub_54D564 | str_byte | confirmed | lstrlib.c | `out of range` |
+| 0x0054D9BC | sub_54D9BC | luaI_classend | confirmed | lstrlib.c | `malformed pattern (ends with '%')` |
+| 0x0054DA44 | sub_54DA44 | matchbalance | confirmed | lstrlib.c | `unbalanced pattern` |
+| 0x0054DDF8 | sub_54DDF8 | capture_to_close | confirmed | lstrlib.c | `invalid pattern capture` |
+| 0x0054DE28 | sub_54DE28 | start_capture | confirmed | lstrlib.c | `too many captures` |
+| 0x0054DE80 | sub_54DE80 | push_captures | confirmed | lstrlib.c | `too many captures`, `unfinished capture` |
+| 0x0054DFBC | sub_54DFBC | str_gsub | confirmed | lstrlib.c | `string or function expected` |
+| 0x0054E30C | sub_54E30C | check_capture | confirmed | lstrlib.c | `invalid capture index` |
+| 0x0054E344 | sub_54E344 | str_format | confirmed | lstrlib.c | `invalid option in 'format'` |
+| 0x0054E7FC | sub_54E7FC | luaB_tonumber | confirmed | lbaselib.c | `base out of range` |
+| 0x0054EC28 | sub_54EC28 | luaB_settagmethod | confirmed | lbaselib.c | `gc`, `deprecated use: cannot set the 'gc' tag method` |
+| 0x0054ED30 | sub_54ED30 | luaB_gettagmethod | confirmed | lbaselib.c | `gc`, `deprecated use: cannot get the 'gc' tag method` |
+| 0x0054EF3C | sub_54EF3C | luaB_dostring | confirmed | lbaselib.c | `'dostring' cannot run pre-compiled code` |
+| 0x0054F01C | sub_54F01C | luaB_call | confirmed | lbaselib.c | `too many arguments`, `deprecated option 'p' in 'call'` |
+| 0x0054F154 | sub_54F154 | luaB_tostring | confirmed | lbaselib.c | `table: %p`, `function: %p`, `userdata(%d): %p`, `nil` |
+| 0x0054F388 | sub_54F388 | luaB_assert | confirmed | lbaselib.c | `assertion failed!  %.90s` |
+| 0x0054F408 | sub_54F408 | lua_getn | confirmed | lapi.c | `n` |
+| 0x0054F510 | sub_54F510 | lua_getn | confirmed | lapi.c | `n` |
+| 0x0054F670 | sub_54F670 | auxsort | confirmed | lbaselib.c | `invalid order function for sorting` |
+| 0x0054F994 | sub_54F994 | lua_baselibopen | confirmed | lbaselib.c | `_VERSION` |
+| 0x0054FD40 | sub_54FD40 | luaL_checkstack | confirmed | lauxlib.c | `stack overflow (%.30s)` |
+| 0x0054FD94 | sub_54FD94 | luaL_checkany | confirmed | lauxlib.c | `value expected` |
+| 0x0055024C | sub_55024C | type_error | confirmed | lauxlib.c | `%.8s expected, got %.8s` |
+| 0x0055029C | sub_55029C | lua_getn | confirmed | lapi.c | `n` |
 
 ---
 
@@ -245,21 +366,21 @@ Functions identified by unique string literals in their bodies.
 | USMFile / STR-DLG | 9 | STR_DLG_FORMAT.md |
 | PSF Particles | 6 | PSF_FORMAT.md |
 | Texture | 1 | PSF_FORMAT.md |
-| Lua 4.0 VM | 23 | harvest_symbols.py --lua-match |
+| Lua 4.0.1 VM (core) | 68 | lua_match.py (deep) |
+| Lua 4.0.1 Std Libs | 68 | lua_match.py (deep) |
 | zlib | 10 | harvest_symbols.py --zlib-match |
 | Engine subsystems | 14 | harvest_symbols.py --scan-strings |
 | CRT/Runtime | ~40 | IDA FLIRT signatures |
 | DirectX/AVI | ~10 | IDA FLIRT signatures |
 | Ogg Vorbis | 7 | IDA FLIRT signatures |
 | ATL/COM | 2 | IDA FLIRT signatures |
-| **Total** | **~138 game + ~60 library** | |
+| **Total** | **~251 game + ~60 library** | |
 
 ### TODO: Next naming passes
 
-- [x] ~~**Lua 4.0 VM** — Match "compression" module functions against Lua 4.0.1 source~~ (23 matched)
+- [x] ~~**Lua 4.0 VM** — Match against Lua 4.0.1 source~~ (136 matched, 115 confirmed + 21 likely)
 - [x] ~~**zlib** — Match inflate/deflate functions against zlib source~~ (10 matched)
 - [x] ~~**String cross-refs** — Functions referencing pbeScene, pbeTexture, CTerrain, etc.~~ (14 matched)
-- [ ] **Lua 4.0 deep pass** — Download Lua 4.0.1 source, match ALL Lua functions (not just those with error strings). Expected: 100+ more
 - [ ] **Ogg Vorbis deep pass** — Match ov_* function bodies against libvorbisfile source
 - [ ] **zlib deep pass** — Match remaining zlib/PNG functions (adler32, crc32, deflate, etc.)
 - [ ] **Lua script callbacks** — Match CamelCase command strings (InsertTerrain, InsertRoadNetwork, etc.) to their registration functions
