@@ -13,7 +13,17 @@ import sys
 import argparse
 from enum import IntEnum
 from dataclasses import dataclass, field
-from typing import List, Optional, Tuple
+from typing import List, Optional, Tuple, Dict
+
+# ============================================================
+# Condition chain analysis
+# ============================================================
+
+@dataclass
+class CondRole:
+    invert: bool       # reverse the comparison operator?
+    connector: str     # 'and' or 'or'
+    group_idx: int     # which AND-group this belongs to
 
 # ============================================================
 # Lua 4 Opcodes
@@ -504,6 +514,85 @@ class Decompiler:
             return True  # or: jumps to body
         return False  # and: jumps past body
 
+    def _analyze_condition_chain(self, chunk, first_pc):
+        """Structurally analyze a compound condition chain.
+
+        Returns a dict {pc: CondRole} for each condition in the chain.
+        CondRole.invert = True means the bytecode operator should be reversed.
+        CondRole.connector = 'and'/'or' indicates how this condition connects to the next.
+
+        Jump target roles:
+        - → body_start: OR-success (condition true as written, no inversion)
+        - → another chain member: AND-failure within group (invert)
+        - → skip_target (past body): AND-failure (invert)
+        """
+        ins = chunk.instructions
+        N = len(ins)
+
+        # 1. Collect full chain
+        chain = [first_pc]
+        nxt = self._find_next_condition(chunk, first_pc, include_jmp=False)
+        while nxt >= 0 and nxt not in chain:
+            chain.append(nxt)
+            nxt = self._find_next_condition(chunk, nxt, include_jmp=False)
+
+        if len(chain) < 2:
+            return {first_pc: CondRole(invert=True, connector='and', group_idx=0)}
+
+        # 2. Compute jump targets
+        targets = {cpc: cpc + 1 + get_s(ins[cpc]) for cpc in chain}
+        chain_set = set(chain)
+        last_pc = chain[-1]
+
+        # 3. Identify body_start and skip_target
+        # body_start: smallest target that is past the last chain member and NOT a chain member
+        # skip_target: targets far past the chain
+        chain_end = last_pc + 3  # conservative upper bound of chain span
+
+        body_candidates = []
+        far_targets = []
+        for cpc in chain:
+            t = targets[cpc]
+            if t > last_pc and t not in chain_set and t <= chain_end + 5:
+                body_candidates.append(t)
+            elif t > chain_end + 5:
+                far_targets.append(t)
+
+        if body_candidates:
+            body_start = min(body_candidates)
+        else:
+            # Fallback: instruction after last chain member + 1 push
+            body_start = last_pc + 2
+
+        skip_target = far_targets[0] if far_targets else body_start
+
+        # 4. Classify each condition
+        roles = {}
+        group_idx = 0
+
+        for i, cpc in enumerate(chain):
+            t = targets[cpc]
+            is_last = (i == len(chain) - 1)
+
+            if t == body_start or (not is_last and t > last_pc and t not in chain_set and t <= chain_end + 5):
+                # OR-success: jump to body when condition is TRUE
+                roles[cpc] = CondRole(invert=False, connector='or', group_idx=group_idx)
+                if not is_last:
+                    group_idx += 1
+            elif t in chain_set:
+                # AND-failure: jump to next OR-group when condition FAILS
+                roles[cpc] = CondRole(invert=True, connector='and', group_idx=group_idx)
+            else:
+                # AND-failure (skip): jump past body when condition FAILS
+                roles[cpc] = CondRole(invert=True, connector='and', group_idx=group_idx)
+
+        # Last condition always 'and' (no next condition to connect to)
+        last_role = roles[chain[-1]]
+        roles[chain[-1]] = CondRole(invert=last_role.invert, connector='and',
+                                     group_idx=last_role.group_idx)
+
+        return roles
+
     def _find_elseif_presence(self, chunk, pc):
         """Check if this conditional jump is an elseif."""
         ins = chunk.instructions
@@ -616,14 +705,12 @@ class Decompiler:
     def _build_grouped_condition(cond_parts):
         """Build condition text from [(text, connector), ...] with proper grouping.
 
-        The bytecode pattern for compound conditions produces:
-          or, or, AND, or, AND  for  (A or B or C) and (D or E)
-        Each 'and' terminates an or-group. The last item's connector is always 'and'
-        (the final inverted condition). Groups are separated at and→or transitions.
+        Handles both patterns:
+          Pattern A (OR-of-ANDs): and,or,and,and → (A and B) or (C and D)
+          Pattern B (AND-of-ORs): or,or,and,or,and → (A or B or C) and (D or E)
 
-        Example: [('a>0','or'),('b==1','or'),('c>0','and'),('d==0','or'),('e<0','and')]
-        → Groups: [(a>0, b==1, c>0), (d==0, e<0)] connected by 'and'
-        → Output: '((a>0) or (b==1) or (c>0)) and ((d==0) or (e<0))'
+        The minority connector is the inter-group separator.
+        Groups are split at inter-group connectors.
         """
         if not cond_parts:
             return ''
@@ -631,38 +718,47 @@ class Decompiler:
             return cond_parts[0][0]
 
         # Check if all connectors are the same — no grouping needed
-        connectors = set(c for _, c in cond_parts)
-        if len(connectors) == 1:
-            conn = cond_parts[0][1]
+        connectors = [c for _, c in cond_parts]
+        unique = set(connectors)
+        if len(unique) == 1:
+            conn = connectors[0]
             return f' {conn} '.join(t for t, _ in cond_parts)
 
-        # Mixed connectors: split into groups at 'and' terminators.
-        # Pattern: each group is a run of 'or' conditions ending with one 'and'.
-        # The 'and' is the last condition in the or-group (inverted by the compiler).
+        # Mixed connectors: the minority connector separates groups,
+        # the majority connector joins items within groups.
+        and_count = connectors.count('and')
+        or_count = connectors.count('or')
+
+        if or_count < and_count:
+            # Pattern A: 'or' separates groups, 'and' joins within
+            inter_conn = 'or'
+            intra_conn = 'and'
+        else:
+            # Pattern B: 'and' separates groups, 'or' joins within
+            inter_conn = 'and'
+            intra_conn = 'or'
+
         groups = []
         cur_group = []
-        for i, (text, conn) in enumerate(cond_parts):
+        for text, conn in cond_parts:
             cur_group.append(text)
-            if conn == 'and':
-                # This terminates the current group
+            if conn == inter_conn:
                 groups.append(cur_group)
                 cur_group = []
         if cur_group:
             groups.append(cur_group)
 
         if len(groups) == 1:
-            return ' or '.join(groups[0])
+            return f' {intra_conn} '.join(groups[0])
 
-        # Multiple groups: join items within each group with 'or',
-        # wrap multi-item groups in parens, join groups with 'and'
         parts = []
         for group in groups:
-            group_text = ' or '.join(group)
+            group_text = f' {intra_conn} '.join(group)
             if len(group) > 1:
                 group_text = '(' + group_text + ')'
             parts.append(group_text)
 
-        return ' and '.join(parts)
+        return f' {inter_conn} '.join(parts)
 
     def _compute_local_slots(self, chunk):
         """Compute VM stack slot for each local entry by simulating the compiler."""
@@ -747,6 +843,7 @@ class Decompiler:
         # Condition accumulator: list of (condition_text, connector_type)
         # connector_type is 'or' or 'and' — what follows this condition
         cond_parts = []  # list of (str, str)
+        chain_analysis = {}  # {pc: CondRole} from _analyze_condition_chain
 
         # Do-end blocks
         do_pcs, end_pcs_do = self._find_do_end_blocks(chunk)
@@ -1292,30 +1389,27 @@ class Decompiler:
                     pc += 1
                     continue
 
-                # Build condition part
+                # Build condition part using structural chain analysis
                 jt = jump_types[-1]
-                is_or = self._find_or_presence(chunk, pc)
+                if not chain_analysis:
+                    chain_analysis = self._analyze_condition_chain(chunk, pc)
+                role = chain_analysis.get(pc, CondRole(True, 'and', 0))
+
+                right = peek(0).text
+                left = peek(1).text
 
                 if jt == 'c':
-                    if is_or:
-                        right = peek(0).text
-                        left = peek(1).text
-                        cond_parts.append((f'({left}{cmp_op}{right})', 'or'))
-                    else:
+                    if role.invert:
                         rev_op = CMP_REVERSE.get(cmp_op, cmp_op)
-                        right = peek(0).text
-                        left = peek(1).text
-                        cond_parts.append((f'({left}{rev_op}{right})', 'and'))
-                else:  # while
-                    if is_or or next_cond < 0:
-                        rev_op = CMP_REVERSE.get(cmp_op, cmp_op)
-                        right = peek(0).text
-                        left = peek(1).text
-                        cond_parts.append((f'({left}{rev_op}{right})', 'and'))
+                        cond_parts.append((f'({left}{rev_op}{right})', role.connector))
                     else:
-                        right = peek(0).text
-                        left = peek(1).text
-                        cond_parts.append((f'({left}{cmp_op}{right})', 'or'))
+                        cond_parts.append((f'({left}{cmp_op}{right})', role.connector))
+                else:  # while — flip inversion sense
+                    if not role.invert:
+                        rev_op = CMP_REVERSE.get(cmp_op, cmp_op)
+                        cond_parts.append((f'({left}{rev_op}{right})', role.connector))
+                    else:
+                        cond_parts.append((f'({left}{cmp_op}{right})', role.connector))
 
                 if next_cond >= 0:
                     # More conditions follow, don't emit yet
@@ -1335,6 +1429,7 @@ class Decompiler:
 
                     level += 1
                     cond_parts = []
+                    chain_analysis = {}
 
                     # Track where 'end' goes
                     target = pc + 1 + get_s(ins)
@@ -1361,15 +1456,19 @@ class Decompiler:
 
                 next_cond = self._find_next_condition(chunk, pc, include_jmp=False)
 
+                # Use chain analysis for connector classification
+                if not chain_analysis:
+                    chain_analysis = self._analyze_condition_chain(chunk, pc)
+                role = chain_analysis.get(pc, CondRole(True, 'and', 0))
+
                 if next_cond >= 0:
-                    jt = jump_types[-1]
-                    if self._find_or_presence(chunk, pc):
-                        cond_parts.append((cond_part.strip(), 'and'))
+                    if role.invert:
+                        cond_parts.append((' not ' + cond_part, role.connector))
                     else:
-                        cond_parts.append((' not ' + cond_part, 'or'))
+                        cond_parts.append((cond_part.strip(), role.connector))
                     jump_types.pop()
                 else:
-                    cond_parts.append((cond_part.strip(), 'and'))  # last gets trimmed anyway
+                    cond_parts.append((cond_part.strip(), 'and'))
                     jt = jump_types[-1]
 
                     cond_text = self._build_grouped_condition(cond_parts)
@@ -1390,6 +1489,7 @@ class Decompiler:
 
                     level += 1
                     cond_parts = []
+                    chain_analysis = {}
 
                     target = pc + 1 + get_s(ins)
                     if target < N:
