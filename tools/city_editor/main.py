@@ -415,7 +415,7 @@ class CityEditor:
             f"[J] Junctions {'ON' if self.show_junctions else 'off'}",
             f"[W] Wireframe {'ON' if self.show_wireframe else 'off'}  "
             f"[G] Grid {'ON' if self.show_grid else 'off'}  "
-            f"[R] Reset camera  |  LMB=orbit  RMB=pan  Scroll=zoom",
+            f"[R] Reset  |  Arrows=move  Q/E=up/down  LMB=orbit  RMB=pan  Scroll=zoom",
         ]
         self.info_label.text = '\n'.join(lines)
         self.info_label.width = self.window.width - 16
@@ -525,8 +525,30 @@ class CityEditor:
     def on_mouse_scroll(self, x, y, scroll_x, scroll_y):
         self.camera.zoom(scroll_y)
 
+    # Key-to-movement mapping (arrow keys + WASD for movement)
+    _MOVE_KEYS = None
+
+    @classmethod
+    def _get_move_keys(cls):
+        if cls._MOVE_KEYS is None:
+            key = pyglet.window.key
+            cls._MOVE_KEYS = {
+                key.UP: 'forward', key.DOWN: 'back',
+                key.LEFT: 'left', key.RIGHT: 'right',
+                key.PAGEUP: 'up', key.PAGEDOWN: 'down',
+                key.Q: 'up', key.E: 'down',
+            }
+        return cls._MOVE_KEYS
+
     def on_key_press(self, symbol, modifiers):
         key = pyglet.window.key
+        if symbol in (key.LSHIFT, key.RSHIFT):
+            self.camera.sprint = True
+            return
+        move_keys = self._get_move_keys()
+        if symbol in move_keys:
+            self.camera.keys_held.add(move_keys[symbol])
+            return
         if symbol == key.W:
             self.show_wireframe = not self.show_wireframe
         elif symbol == key.G:
@@ -542,6 +564,18 @@ class CityEditor:
         elif symbol == key._3:
             self.show_connections = not self.show_connections
         self._update_info()
+
+    def on_key_release(self, symbol, modifiers):
+        key = pyglet.window.key
+        if symbol in (key.LSHIFT, key.RSHIFT):
+            self.camera.sprint = False
+            return
+        move_keys = self._get_move_keys()
+        if symbol in move_keys:
+            self.camera.keys_held.discard(move_keys[symbol])
+
+    def on_update(self, dt):
+        self.camera.update(dt)
 
 
 # ── Main ───────────────────────────────────────────────────────────────────
@@ -597,7 +631,11 @@ def main():
     def on_key_press(symbol, modifiers):
         editor.on_key_press(symbol, modifiers)
 
-    pyglet.clock.schedule_interval(lambda dt: None, 1 / 60.0)
+    @window.event
+    def on_key_release(symbol, modifiers):
+        editor.on_key_release(symbol, modifiers)
+
+    pyglet.clock.schedule_interval(editor.on_update, 1 / 60.0)
     pyglet.app.run()
 
 

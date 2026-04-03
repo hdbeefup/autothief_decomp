@@ -434,6 +434,9 @@ class OrbitCamera:
         self.near = 1.0
         self.far = 100000.0
         self.fov = 60
+        # Key movement state
+        self.keys_held = set()
+        self.sprint = False
 
     def get_eye(self):
         cx, cy, cz = self.center
@@ -441,6 +444,16 @@ class OrbitCamera:
         ey = cy + self.distance * math.sin(self.pitch)
         ez = cz + self.distance * math.cos(self.pitch) * math.cos(self.yaw)
         return (ex, ey, ez)
+
+    def get_forward(self):
+        """Camera forward direction projected onto XZ plane (normalized)."""
+        fx = -math.sin(self.yaw)
+        fz = -math.cos(self.yaw)
+        return (fx, fz)
+
+    def get_right(self):
+        """Camera right direction on XZ plane (normalized)."""
+        return (math.cos(self.yaw), -math.sin(self.yaw))
 
     def get_view_matrix(self):
         ex, ey, ez = self.get_eye()
@@ -467,8 +480,41 @@ class OrbitCamera:
         self.center[2] -= (dx * right_z + dy * up_z) * speed
 
     def zoom(self, scroll_y):
-        self.distance *= 0.9 ** scroll_y
-        self.distance = max(1.0, self.distance)
+        # Fixed-step zoom: move a fraction of distance but with a minimum step
+        step = max(self.distance * 0.15, 50.0) * scroll_y
+        self.distance -= step
+        self.distance = max(10.0, self.distance)
+
+    def update(self, dt):
+        """Tick movement from held keys. Call each frame."""
+        if not self.keys_held:
+            return
+        # Speed scales with distance so movement feels consistent
+        speed = max(self.distance * 0.8, 200.0) * dt
+        if self.sprint:
+            speed *= 4.0
+        fx, fz = self.get_forward()
+        rx, rz = self.get_right()
+        dx = dz = dy = 0.0
+        if 'forward' in self.keys_held:
+            dx += fx * speed
+            dz += fz * speed
+        if 'back' in self.keys_held:
+            dx -= fx * speed
+            dz -= fz * speed
+        if 'left' in self.keys_held:
+            dx -= rx * speed
+            dz -= rz * speed
+        if 'right' in self.keys_held:
+            dx += rx * speed
+            dz += rz * speed
+        if 'up' in self.keys_held:
+            dy += speed
+        if 'down' in self.keys_held:
+            dy -= speed
+        self.center[0] += dx
+        self.center[1] += dy
+        self.center[2] += dz
 
     def focus_on(self, center, radius):
         self.center = list(center)
