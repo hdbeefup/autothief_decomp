@@ -13,17 +13,7 @@ import sys
 import argparse
 from enum import IntEnum
 from dataclasses import dataclass, field
-from typing import List, Optional, Tuple, Dict
-
-# ============================================================
-# Condition chain analysis
-# ============================================================
-
-@dataclass
-class CondRole:
-    invert: bool       # reverse the comparison operator?
-    connector: str     # 'and' or 'or'
-    group_idx: int     # which AND-group this belongs to
+from typing import List, Optional, Tuple
 
 # ============================================================
 # Lua 4 Opcodes
@@ -418,22 +408,112 @@ class Decompiler:
         if pc + 3 < N and is_cond(pc + 3):
             if self._same_line(chunk, pc + 3, pc) or related_target(pc + 3):
                 return pc + 3
-
-        # Check jump target: if this condition jumps to a location where another
-        # conditional group starts (for multi-line or grouped conditions).
-        if 0 <= my_target < N and my_target > pc:
-            our_end = self._find_end_of_jump(chunk, pc)
-            for delta in [0, 2, 3]:
-                check_pc = my_target + delta
-                if check_pc < N and is_cond(check_pc):
-                    their_end = self._find_end_of_jump(chunk, check_pc)
-                    if their_end == our_end:
-                        return check_pc
-                    if my_target < our_end and their_end > our_end:
-                        return check_pc
-                    break
-
         return -1
+
+    def _find_compound_chain(self, chunk, first_pc):
+        """Find compound (A and B) or (C and D) chains that _find_next_condition misses.
+
+        Returns None if the chain starting at first_pc is not a compound pattern.
+        Returns a list of (pc, is_or) tuples for the full compound chain if found.
+
+        The compound pattern has AND-failure jumps that go to the start of the
+        next OR-group. _find_next_condition can't follow these because the
+        target is on a different line and targets don't match.
+        """
+        ins = chunk.instructions
+        N = len(ins)
+
+        def is_cond(i):
+            if i < 0 or i >= N:
+                return False
+            op = get_op(ins[i])
+            return Op.JMPNE <= op <= Op.JMPONF
+
+        # First, walk the sequential chain
+        seq_chain = [first_pc]
+        nxt = self._find_next_condition(chunk, first_pc, include_jmp=False)
+        while nxt >= 0 and nxt not in seq_chain:
+            seq_chain.append(nxt)
+            nxt = self._find_next_condition(chunk, nxt, include_jmp=False)
+
+        # Find the body_start: the most common forward target among seq_chain
+        # members that's near the chain end
+        last_seq = seq_chain[-1]
+        target_counts = {}
+        for cpc in seq_chain:
+            t = cpc + 1 + get_s(ins[cpc])
+            if t > last_seq and t <= last_seq + 20:
+                target_counts[t] = target_counts.get(t, 0) + 1
+        if target_counts:
+            body_start = max(target_counts, key=lambda t: (target_counts[t], t))
+        else:
+            body_start = last_seq + 1
+
+        # Try to expand: follow AND-failure jump targets that land BEFORE body_start
+        chain = list(seq_chain)
+        chain_set = set(chain)
+        changed = True
+        while changed:
+            changed = False
+            for cpc in list(chain):
+                target = cpc + 1 + get_s(ins[cpc])
+                if target in chain_set or target < first_pc or target >= body_start:
+                    continue
+                # Look for a condition at or near the target
+                for delta in [0, 2, 3]:
+                    tpc = target + delta
+                    if tpc >= body_start:
+                        break
+                    if tpc < N and is_cond(tpc) and tpc not in chain_set:
+                        chain.append(tpc)
+                        chain_set.add(tpc)
+                        changed = True
+                        # Walk sequential neighbors before body_start
+                        walk = tpc
+                        while True:
+                            found_next = False
+                            for d2 in [2, 3]:
+                                npc = walk + d2
+                                if (npc < N and npc < body_start and
+                                        is_cond(npc) and npc not in chain_set):
+                                    chain.append(npc)
+                                    chain_set.add(npc)
+                                    walk = npc
+                                    found_next = True
+                                    break
+                            if not found_next:
+                                break
+                        break
+
+        if len(chain) <= len(seq_chain):
+            return None  # no expansion found
+
+        # Sort and classify each condition
+        chain.sort()
+        last_pc = chain[-1]
+
+        # Recompute body_start with the full chain
+        all_targets = set()
+        for cpc in chain:
+            all_targets.add(cpc + 1 + get_s(ins[cpc]))
+        # body_start: smallest target past the chain, not in chain
+        body_candidates = [t for t in all_targets
+                          if t not in chain_set and t > last_pc and t <= last_pc + 20]
+        if body_candidates:
+            body_start = min(body_candidates)
+        else:
+            body_start = last_pc + 1
+
+        # Classify: target == body_start → OR-success (is_or=True)
+        #           target in chain_set → AND-failure (is_or=False, invert)
+        #           else → AND-failure skip (is_or=False, invert)
+        result = []
+        for cpc in chain:
+            t = cpc + 1 + get_s(ins[cpc])
+            is_or = (t == body_start)
+            result.append((cpc, is_or))
+
+        return result
 
     def _find_next_condition_pref_jmp(self, chunk, pc):
         """FindNextCondition_PrefJMP: prefers jump target, then pc+2, pc+3."""
@@ -514,84 +594,26 @@ class Decompiler:
             return True  # or: jumps to body
         return False  # and: jumps past body
 
-    def _analyze_condition_chain(self, chunk, first_pc):
-        """Structurally analyze a compound condition chain.
+    @staticmethod
+    def _parenthesize_compound(cond_text):
+        """Add parentheses around AND groups in compound OR-of-AND conditions.
 
-        Returns a dict {pc: CondRole} for each condition in the chain.
-        CondRole.invert = True means the bytecode operator should be reversed.
-        CondRole.connector = 'and'/'or' indicates how this condition connects to the next.
-
-        Jump target roles:
-        - → body_start: OR-success (condition true as written, no inversion)
-        - → another chain member: AND-failure within group (invert)
-        - → skip_target (past body): AND-failure (invert)
+        Input:  '(A) and (B) or (C) and (D)'
+        Output: '((A) and (B)) or ((C) and (D))'
         """
-        ins = chunk.instructions
-        N = len(ins)
-
-        # 1. Collect full chain
-        chain = [first_pc]
-        nxt = self._find_next_condition(chunk, first_pc, include_jmp=False)
-        while nxt >= 0 and nxt not in chain:
-            chain.append(nxt)
-            nxt = self._find_next_condition(chunk, nxt, include_jmp=False)
-
-        if len(chain) < 2:
-            return {first_pc: CondRole(invert=True, connector='and', group_idx=0)}
-
-        # 2. Compute jump targets
-        targets = {cpc: cpc + 1 + get_s(ins[cpc]) for cpc in chain}
-        chain_set = set(chain)
-        last_pc = chain[-1]
-
-        # 3. Identify body_start and skip_target
-        # body_start: smallest target that is past the last chain member and NOT a chain member
-        # skip_target: targets far past the chain
-        chain_end = last_pc + 3  # conservative upper bound of chain span
-
-        body_candidates = []
-        far_targets = []
-        for cpc in chain:
-            t = targets[cpc]
-            if t > last_pc and t not in chain_set and t <= chain_end + 5:
-                body_candidates.append(t)
-            elif t > chain_end + 5:
-                far_targets.append(t)
-
-        if body_candidates:
-            body_start = min(body_candidates)
-        else:
-            # Fallback: instruction after last chain member + 1 push
-            body_start = last_pc + 2
-
-        skip_target = far_targets[0] if far_targets else body_start
-
-        # 4. Classify each condition
-        roles = {}
-        group_idx = 0
-
-        for i, cpc in enumerate(chain):
-            t = targets[cpc]
-            is_last = (i == len(chain) - 1)
-
-            if t == body_start or (not is_last and t > last_pc and t not in chain_set and t <= chain_end + 5):
-                # OR-success: jump to body when condition is TRUE
-                roles[cpc] = CondRole(invert=False, connector='or', group_idx=group_idx)
-                if not is_last:
-                    group_idx += 1
-            elif t in chain_set:
-                # AND-failure: jump to next OR-group when condition FAILS
-                roles[cpc] = CondRole(invert=True, connector='and', group_idx=group_idx)
+        # Split on ' or ' to get groups
+        parts = cond_text.split(' or ')
+        if len(parts) <= 1:
+            return cond_text
+        # Wrap groups that contain ' and ' in parens
+        wrapped = []
+        for part in parts:
+            part = part.strip()
+            if ' and ' in part:
+                wrapped.append('(' + part + ')')
             else:
-                # AND-failure (skip): jump past body when condition FAILS
-                roles[cpc] = CondRole(invert=True, connector='and', group_idx=group_idx)
-
-        # Last condition always 'and' (no next condition to connect to)
-        last_role = roles[chain[-1]]
-        roles[chain[-1]] = CondRole(invert=last_role.invert, connector='and',
-                                     group_idx=last_role.group_idx)
-
-        return roles
+                wrapped.append(part)
+        return ' or '.join(wrapped)
 
     def _find_elseif_presence(self, chunk, pc):
         """Check if this conditional jump is an elseif."""
@@ -701,65 +723,6 @@ class Decompiler:
         """Count locals with endpc == vb_pc."""
         return sum(1 for loc in chunk.locals if loc.endpc == vb_pc)
 
-    @staticmethod
-    def _build_grouped_condition(cond_parts):
-        """Build condition text from [(text, connector), ...] with proper grouping.
-
-        Handles both patterns:
-          Pattern A (OR-of-ANDs): and,or,and,and → (A and B) or (C and D)
-          Pattern B (AND-of-ORs): or,or,and,or,and → (A or B or C) and (D or E)
-
-        The minority connector is the inter-group separator.
-        Groups are split at inter-group connectors.
-        """
-        if not cond_parts:
-            return ''
-        if len(cond_parts) == 1:
-            return cond_parts[0][0]
-
-        # Check if all connectors are the same — no grouping needed
-        connectors = [c for _, c in cond_parts]
-        unique = set(connectors)
-        if len(unique) == 1:
-            conn = connectors[0]
-            return f' {conn} '.join(t for t, _ in cond_parts)
-
-        # Mixed connectors: the minority connector separates groups,
-        # the majority connector joins items within groups.
-        and_count = connectors.count('and')
-        or_count = connectors.count('or')
-
-        if or_count < and_count:
-            # Pattern A: 'or' separates groups, 'and' joins within
-            inter_conn = 'or'
-            intra_conn = 'and'
-        else:
-            # Pattern B: 'and' separates groups, 'or' joins within
-            inter_conn = 'and'
-            intra_conn = 'or'
-
-        groups = []
-        cur_group = []
-        for text, conn in cond_parts:
-            cur_group.append(text)
-            if conn == inter_conn:
-                groups.append(cur_group)
-                cur_group = []
-        if cur_group:
-            groups.append(cur_group)
-
-        if len(groups) == 1:
-            return f' {intra_conn} '.join(groups[0])
-
-        parts = []
-        for group in groups:
-            group_text = f' {intra_conn} '.join(group)
-            if len(group) > 1:
-                group_text = '(' + group_text + ')'
-            parts.append(group_text)
-
-        return f' {inter_conn} '.join(parts)
-
     def _compute_local_slots(self, chunk):
         """Compute VM stack slot for each local entry by simulating the compiler."""
         events = []
@@ -814,7 +777,7 @@ class Decompiler:
         local_slots = self._compute_local_slots(chunk)
 
         # Stack (VM-like, 0-based positions)
-        stack = [SVal('nil', VKind.NIL)] * max(chunk.max_stack_size * 2 + 32, 512)
+        stack = [SVal('nil', VKind.NIL)] * max(chunk.max_stack_size + 16, 256)
         top = 0  # next free slot
 
         # Output
@@ -840,10 +803,9 @@ class Decompiler:
         # Track where 'end' should be emitted (list of vb_pc values)
         end_positions = []
 
-        # Condition accumulator: list of (condition_text, connector_type)
-        # connector_type is 'or' or 'and' — what follows this condition
-        cond_parts = []  # list of (str, str)
-        chain_analysis = {}  # {pc: CondRole} from _analyze_condition_chain
+        # Condition accumulator for compound conditions
+        cond_str = ''
+        compound_info = None  # list of (pc, is_or) from _find_compound_chain
 
         # Do-end blocks
         do_pcs, end_pcs_do = self._find_do_end_blocks(chunk)
@@ -999,9 +961,7 @@ class Decompiler:
 
             elif op in (Op.CALL, Op.TAILCALL):
                 func_pos = get_a(ins)  # 0-based stack position of function
-                raw_b = get_b(ins) if op == Op.CALL else 0
-                # B=0: no returns, B=1..254: exact count, B=255: pass-through to next call (treat as 1)
-                num_ret = raw_b if raw_b < 255 else 1
+                num_ret = get_b(ins) if op == Op.CALL else 0
 
                 # Check for locals starting at this instruction (for multi-return)
                 loc_start_idx = self._find_locals_at(chunk, vb_pc)
@@ -1043,20 +1003,12 @@ class Decompiler:
                     # Statement (no return value)
                     emit(call_expr)
                 else:
-                    # Push num_ret entries to match VM stack.
-                    # First entry has the call expression, rest are placeholders.
-                    # SETLOCAL will process them in reverse order.
+                    # Push return value as expression
                     sv = SVal(call_expr, VKind.EXPR)
                     sv.is_func_ret = True
                     sv.func_ret_count = num_ret
                     stack[top] = sv
                     top += 1
-                    for _j in range(1, num_ret):
-                        placeholder = SVal('', VKind.EXPR)
-                        placeholder.is_func_ret = True
-                        placeholder.func_ret_count = 0  # placeholder marker
-                        stack[top] = placeholder
-                        top += 1
 
             elif op == Op.PUSHNIL:
                 count = get_u(ins)
@@ -1158,32 +1110,24 @@ class Decompiler:
 
                 val_text = process_value_for_output()
 
-                # Handle multi-return assignment.
-                # Pattern: CALL pushes N values, then N SETLOCALs fire in REVERSE order.
-                # The main SVal (with func_ret_count > 0) is at the bottom of the N entries.
-                # Placeholders (func_ret_count == 0, is_func_ret == True) are above it.
+                # Handle multi-return assignment
                 sv = peek(0)
-                if sv.is_func_ret:
-                    # Find the main func-ret entry (the one with func_ret_count > 0)
-                    found_main = False
-                    for k in range(top - 1, -1, -1):
-                        if stack[k].is_func_ret and stack[k].func_ret_count > 0:
-                            main_sv = stack[k]
-                            if not hasattr(main_sv, '_accum_names'):
-                                main_sv._accum_names = []
-                            main_sv._accum_names.append(name)
-                            main_sv.func_ret_count -= 1
-                            pop_val(1)  # pop the current entry (placeholder or last)
-                            if main_sv.func_ret_count == 0:
-                                # All names collected (in reverse). Reverse and emit.
-                                names = ', '.join(reversed(main_sv._accum_names))
-                                emit(f'{names}={main_sv.text}')
-                                # Main entry should already be popped (it was the last one)
-                            found_main = True
-                            break
-                    if not found_main:
-                        emit(f'{name}={val_text}')
+                if sv.is_func_ret and sv.func_ret_count > 0:
+                    # Multi-return: accumulate names
+                    if hasattr(sv, '_accum_names'):
+                        sv._accum_names.append(name)
+                    else:
+                        sv._accum_names = [name]
+                    sv.func_ret_count -= 1
+                    if sv.func_ret_count == 0:
+                        names = ', '.join(sv._accum_names)
+                        emit(f'{names}={sv.text}')
                         pop_val(1)
+                    else:
+                        sv.text = f'{name}, {sv.text}' if not hasattr(sv, '_orig_text') else sv._orig_text
+                        if not hasattr(sv, '_orig_text'):
+                            sv._orig_text = sv.text
+                        stack[top - 1] = sv  # update in place
                 else:
                     emit(f'{name}={val_text}')
                     pop_val(1)
@@ -1203,24 +1147,16 @@ class Decompiler:
                     emit(func_text, semi=False)
                     emit_blank()
                     pop_val(1)
-                elif sv.is_func_ret:
-                    pop_val(1)
-                    found_main = False
-                    for k in range(top - 1, -1, -1):
-                        if stack[k].is_func_ret and stack[k].func_ret_count > 0:
-                            main_sv = stack[k]
-                            if not hasattr(main_sv, '_accum_names'):
-                                main_sv._accum_names = []
-                            main_sv._accum_names.append(name)
-                            main_sv.func_ret_count -= 1
-                            if main_sv.func_ret_count == 0:
-                                names = ', '.join(reversed(main_sv._accum_names))
-                                emit(f'{names}={main_sv.text}')
-                                pop_val(1)
-                            found_main = True
-                            break
-                    if not found_main:
-                        emit(f'{name}={process_value_for_output()}')
+                elif sv.is_func_ret and sv.func_ret_count > 0:
+                    if not hasattr(sv, '_accum_names'):
+                        sv._accum_names = [name]
+                    else:
+                        sv._accum_names.append(name)
+                    sv.func_ret_count -= 1
+                    if sv.func_ret_count == 0:
+                        names = ', '.join(sv._accum_names)
+                        emit(f'{names}={sv.text}')
+                        pop_val(1)
                 else:
                     val_text = process_value_for_output()
                     emit(f'{name}={val_text}')
@@ -1379,67 +1315,117 @@ class Decompiler:
                 if pc + 1 < N and get_op(ins_list[pc + 1]) == Op.PUSHNILJMP:
                     right = peek(0).text
                     left = peek(1).text
-                    prev_text = self._build_grouped_condition(cond_parts) if cond_parts else ''
-                    result = prev_text + f'({left}{cmp_op}{right})'
+                    result = cond_str + f'({left}{cmp_op}{right})'
                     pop_val(2)
                     push_val(SVal(result, VKind.EXPR), vb_pc)
-                    cond_parts = []
+                    cond_str = ''
                     jump_types.pop()
                     pc += 2  # skip PUSHNILJMP and PUSHINT
                     pc += 1
                     continue
 
-                # Build condition part using structural chain analysis
-                jt = jump_types[-1]
-                if not chain_analysis:
-                    chain_analysis = self._analyze_condition_chain(chunk, pc)
-                role = chain_analysis.get(pc, CondRole(True, 'and', 0))
+                # Check for compound (A and B) or (C and D) pattern at first cond
+                if not compound_info and cond_str == '':
+                    compound_info = self._find_compound_chain(chunk, pc)
 
+                # Build condition text
+                jt = jump_types[-1]
                 right = peek(0).text
                 left = peek(1).text
 
-                if jt == 'c':
-                    if role.invert:
-                        rev_op = CMP_REVERSE.get(cmp_op, cmp_op)
-                        cond_parts.append((f'({left}{rev_op}{right})', role.connector))
-                    else:
-                        cond_parts.append((f'({left}{cmp_op}{right})', role.connector))
-                else:  # while — flip inversion sense
-                    if not role.invert:
-                        rev_op = CMP_REVERSE.get(cmp_op, cmp_op)
-                        cond_parts.append((f'({left}{rev_op}{right})', role.connector))
-                    else:
-                        cond_parts.append((f'({left}{cmp_op}{right})', role.connector))
-
-                if next_cond >= 0:
-                    # More conditions follow, don't emit yet
-                    jump_types.pop()
-                else:
-                    # Last condition in chain — build grouped text and emit
-                    jt = jump_types[-1]
-                    cond_text = self._build_grouped_condition(cond_parts)
-
-                    is_elseif = self._find_elseif_presence(chunk, pc)
-                    prefix = 'else' if is_elseif else ''
+                if compound_info:
+                    # COMPOUND PATH: use structural classification
+                    ci_dict = {cpc: ior for cpc, ior in compound_info}
+                    ci_pcs = [cpc for cpc, _ in compound_info]
+                    is_or_compound = ci_dict.get(pc, False)
+                    is_last = (pc == ci_pcs[-1])
 
                     if jt == 'c':
-                        emit(f'{prefix}if {cond_text} then', semi=False)
+                        if is_or_compound:
+                            cond_str += f'({left}{cmp_op}{right}) or '
+                        else:
+                            rev_op = CMP_REVERSE.get(cmp_op, cmp_op)
+                            cond_str += f'({left}{rev_op}{right}) and '
+                    else:  # while — flip sense
+                        if not is_or_compound:
+                            cond_str += f'({left}{cmp_op}{right}) or '
+                        else:
+                            rev_op = CMP_REVERSE.get(cmp_op, cmp_op)
+                            cond_str += f'({left}{rev_op}{right}) and '
+
+                    if not is_last:
+                        jump_types.pop()
                     else:
-                        emit(f'{prefix}while {cond_text} do', semi=False)
+                        # Emit compound condition
+                        jt = jump_types[-1]
+                        cond_text = cond_str.rstrip()
+                        if cond_text.endswith(' and'):
+                            cond_text = cond_text[:-4]
+                        elif cond_text.endswith(' or'):
+                            cond_text = cond_text[:-3]
+                        # Add parentheses around AND groups separated by OR
+                        cond_text = self._parenthesize_compound(cond_text)
 
-                    level += 1
-                    cond_parts = []
-                    chain_analysis = {}
+                        is_elseif = self._find_elseif_presence(chunk, pc)
+                        prefix = 'else' if is_elseif else ''
 
-                    # Track where 'end' goes
-                    target = pc + 1 + get_s(ins)
-                    if target < N:
-                        target_ins = ins_list[target - 1] if target > 0 else 0
-                        target_op = get_op(target_ins) if target > 0 else Op.END
-                        if target_op != Op.JMP:
-                            # No else block, add end position
-                            end_positions.append(target + 1)  # convert to vb_pc
-                        # else: JMP handler will add end via else tracking
+                        if jt == 'c':
+                            emit(f'{prefix}if {cond_text} then', semi=False)
+                        else:
+                            emit(f'{prefix}while {cond_text} do', semi=False)
+
+                        level += 1
+                        cond_str = ''
+                        compound_info = None
+
+                        target = pc + 1 + get_s(ins)
+                        if target < N:
+                            target_ins = ins_list[target - 1] if target > 0 else 0
+                            target_op = get_op(target_ins) if target > 0 else Op.END
+                            if target_op != Op.JMP:
+                                end_positions.append(target + 1)
+                else:
+                    # NORMAL PATH: use _find_or_presence
+                    if jt == 'c':
+                        if self._find_or_presence(chunk, pc):
+                            cond_str += f'({left}{cmp_op}{right}) or '
+                        else:
+                            rev_op = CMP_REVERSE.get(cmp_op, cmp_op)
+                            cond_str += f'({left}{rev_op}{right}) and '
+                    else:  # while
+                        if self._find_or_presence(chunk, pc) or next_cond < 0:
+                            rev_op = CMP_REVERSE.get(cmp_op, cmp_op)
+                            cond_str += f'({left}{rev_op}{right}) and '
+                        else:
+                            cond_str += f'({left}{cmp_op}{right}) or '
+
+                    if next_cond >= 0:
+                        jump_types.pop()
+                    else:
+                        jt = jump_types[-1]
+                        cond_text = cond_str.rstrip()
+                        if cond_text.endswith(' and'):
+                            cond_text = cond_text[:-4]
+                        elif cond_text.endswith(' or'):
+                            cond_text = cond_text[:-3]
+
+                        is_elseif = self._find_elseif_presence(chunk, pc)
+                        prefix = 'else' if is_elseif else ''
+
+                        if jt == 'c':
+                            emit(f'{prefix}if {cond_text} then', semi=False)
+                        else:
+                            emit(f'{prefix}while {cond_text} do', semi=False)
+
+                        level += 1
+                        cond_str = ''
+
+                        target = pc + 1 + get_s(ins)
+                        if target < N:
+                            target_ins = ins_list[target - 1] if target > 0 else 0
+                            target_op = get_op(target_ins) if target > 0 else Op.END
+                            if target_op != Op.JMP:
+                                end_positions.append(target + 1)
 
                 pop_val(2)
 
@@ -1456,22 +1442,18 @@ class Decompiler:
 
                 next_cond = self._find_next_condition(chunk, pc, include_jmp=False)
 
-                # Use chain analysis for connector classification
-                if not chain_analysis:
-                    chain_analysis = self._analyze_condition_chain(chunk, pc)
-                role = chain_analysis.get(pc, CondRole(True, 'and', 0))
-
                 if next_cond >= 0:
-                    if role.invert:
-                        cond_parts.append((' not ' + cond_part, role.connector))
+                    jt = jump_types[-1]
+                    if self._find_or_presence(chunk, pc):
+                        cond_str += cond_part + ' and '
                     else:
-                        cond_parts.append((cond_part.strip(), role.connector))
+                        cond_str += ' not ' + cond_part + ' or '
                     jump_types.pop()
                 else:
-                    cond_parts.append((cond_part.strip(), 'and'))
+                    cond_str += cond_part
                     jt = jump_types[-1]
 
-                    cond_text = self._build_grouped_condition(cond_parts)
+                    cond_text = cond_str.strip()
                     # Clean up double negations
                     while 'not not' in cond_text:
                         cond_text = cond_text.replace('not not', '')
@@ -1488,8 +1470,7 @@ class Decompiler:
                         emit(f'{prefix}while {cond_text} do', semi=False)
 
                     level += 1
-                    cond_parts = []
-                    chain_analysis = {}
+                    cond_str = ''
 
                     target = pc + 1 + get_s(ins)
                     if target < N:
