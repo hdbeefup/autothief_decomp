@@ -23,7 +23,7 @@ class PMModel:
         self.vertices = []       # (x, y, z) in original D3D coords
         self.triangles = []      # (i0, i1, i2, u0, v0, u1, v1, u2, v2, mat_idx)
         self.materials = []      # texture path strings
-        self.helpers = []        # raw 76-byte blocks
+        self.helpers = []        # list of (name, x, y, z)
         self.normals = []        # per-vertex (nx, ny, nz)
         self.vertex_indices = [] # per-vertex uint16
 
@@ -88,9 +88,12 @@ class PMModel:
             if m.flags & 4:
                 f.read(tri_count * 32)
 
-            # Helpers
+            # Helpers: 76 bytes each (name[32] + data[32] + position[12])
             for _ in range(helper_count):
-                m.helpers.append(f.read(76))
+                hdata = f.read(76)
+                hname = hdata[:32].split(b'\x00')[0].decode('ascii', errors='replace')
+                hx, hy, hz = struct.unpack_from('<fff', hdata, 0x40)
+                m.helpers.append((hname, hx, hy, hz))
 
             # Materials
             for _ in range(mat_count):
@@ -157,40 +160,15 @@ def d3d_normal_to_blender(nx, ny, nz):
 
 # ── Import logic ──────────────────────────────────────────────────────────
 
-def import_pm(filepath, context, import_textures=True):
-    pm = PMModel.load(filepath)
-    model_name = os.path.splitext(os.path.basename(filepath))[0]
-
-    # Convert vertices to Blender coords
-    bl_verts = [d3d_to_blender(*v) for v in pm.vertices]
-
-    # Build face list (swap i1↔i2 for CW→CCW winding)
-    faces = []
-    face_mat_indices = []
-    face_uvs = []  # per-face list of [(u0,v0), (u1,v1), (u2,v2)]
-    for tri in pm.triangles:
-        i0, i1, i2 = tri[0], tri[2], tri[1]  # swap 1↔2 for CW→CCW winding
-        faces.append((i0, i1, i2))
-        face_mat_indices.append(tri[9])
-        # UVs must follow the swapped face order; flip V
-        face_uvs.append([
-            (tri[3], 1.0 - tri[4]),   # UV for orig i0 (loop 0)
-            (tri[7], 1.0 - tri[8]),   # UV for orig i2 (loop 1, was swapped)
-            (tri[5], 1.0 - tri[6]),   # UV for orig i1 (loop 2, was swapped)
-        ])
-
-    # Create mesh
-    mesh = bpy.data.meshes.new(model_name)
-    mesh.from_pydata(bl_verts, [], faces)
-
-    # Materials
-    textures_root = find_textures_root(filepath) if import_textures else None
+def _create_bl_materials(pm, textures_root):
+    """Create Blender materials from PM material list."""
+    bl_materials = []
     for mat_name in pm.materials:
         bl_mat = bpy.data.materials.new(name=mat_name.replace('\\', '/'))
         bl_mat.use_nodes = True
         bsdf = bl_mat.node_tree.nodes.get('Principled BSDF')
 
-        if import_textures and textures_root:
+        if textures_root:
             tex_path = find_texture(textures_root, mat_name)
             if tex_path and bsdf:
                 tex_node = bl_mat.node_tree.nodes.new('ShaderNodeTexImage')
@@ -201,39 +179,120 @@ def import_pm(filepath, context, import_textures=True):
                 except Exception:
                     pass
 
-        mesh.materials.append(bl_mat)
+        bl_materials.append(bl_mat)
+    return bl_materials
 
-    # Assign material indices per face
-    for fi, mat_idx in enumerate(face_mat_indices):
-        if fi < len(mesh.polygons):
-            mesh.polygons[fi].material_index = min(mat_idx, len(pm.materials) - 1)
 
-    # UV layer
-    uv_layer = mesh.uv_layers.new(name="UVMap")
-    for fi, poly in enumerate(mesh.polygons):
-        for li, loop_idx in enumerate(poly.loop_indices):
-            if fi < len(face_uvs) and li < len(face_uvs[fi]):
-                uv_layer.data[loop_idx].uv = face_uvs[fi][li]
+def _build_bmesh(pm, bl_verts, mat_filter=None):
+    """Build a BMesh from PM data. If mat_filter is set, only include that material index."""
+    bm = bmesh.new()
 
-    # Normals
-    if pm.normals:
-        bl_normals = [d3d_normal_to_blender(*n) for n in pm.normals]
-        mesh.normals_split_custom_set_from_vertices(bl_normals)
-        mesh.use_auto_smooth = True
+    bm_verts = [bm.verts.new(v) for v in bl_verts]
+    bm.verts.ensure_lookup_table()
+    uv_layer = bm.loops.layers.uv.new("UVMap")
 
-    mesh.update()
-    mesh.validate()
+    for tri in pm.triangles:
+        mat_idx = tri[9]
+        if mat_filter is not None and mat_idx != mat_filter:
+            continue
 
-    # Create object and link to scene
-    obj = bpy.data.objects.new(model_name, mesh)
-    context.collection.objects.link(obj)
-    context.view_layer.objects.active = obj
-    obj.select_set(True)
+        try:
+            face = bm.faces.new((bm_verts[tri[0]], bm_verts[tri[2]], bm_verts[tri[1]]))
+        except ValueError:
+            continue
 
-    print(f"Imported PM: {model_name} ({len(pm.vertices)} verts, "
-          f"{len(pm.triangles)} tris, {len(pm.materials)} mats)")
+        face.material_index = 0 if mat_filter is not None else min(mat_idx, max(len(pm.materials) - 1, 0))
 
-    return obj
+        face.loops[0][uv_layer].uv = (tri[3], 1.0 - tri[4])
+        face.loops[1][uv_layer].uv = (tri[7], 1.0 - tri[8])
+        face.loops[2][uv_layer].uv = (tri[5], 1.0 - tri[6])
+
+    # Remove unused vertices
+    verts_to_remove = [v for v in bm.verts if not v.link_faces]
+    for v in verts_to_remove:
+        bm.verts.remove(v)
+
+    return bm
+
+
+def _create_helpers(pm, context, parent_obj):
+    """Create Blender empties for PM helper objects."""
+    if not pm.helpers:
+        return
+    for hname, hx, hy, hz in pm.helpers:
+        empty = bpy.data.objects.new(hname, None)
+        empty.empty_display_type = 'PLAIN_AXES'
+        empty.empty_display_size = 5.0
+        empty.location = d3d_to_blender(hx, hy, hz)
+        empty.parent = parent_obj
+        context.collection.objects.link(empty)
+
+
+def import_pm(filepath, context, import_textures=True, split_by_material=False):
+    pm = PMModel.load(filepath)
+    model_name = os.path.splitext(os.path.basename(filepath))[0]
+
+    bl_verts = [d3d_to_blender(*v) for v in pm.vertices]
+    textures_root = find_textures_root(filepath) if import_textures else None
+    bl_materials = _create_bl_materials(pm, textures_root)
+
+    if split_by_material and len(pm.materials) > 1:
+        # Create root empty to parent everything to
+        root = bpy.data.objects.new(model_name, None)
+        root.empty_display_type = 'PLAIN_AXES'
+        root.empty_display_size = 1.0
+        context.collection.objects.link(root)
+
+        for mi, mat_name in enumerate(pm.materials):
+            bm = _build_bmesh(pm, bl_verts, mat_filter=mi)
+            if len(bm.faces) == 0:
+                bm.free()
+                continue
+
+            short_name = mat_name.replace('\\', '/').split('/')[-1]
+            mesh = bpy.data.meshes.new(f"{model_name}_{short_name}")
+            mesh.materials.append(bl_materials[mi])
+            bm.to_mesh(mesh)
+            bm.free()
+            mesh.update()
+
+            obj = bpy.data.objects.new(f"{model_name}_{short_name}", mesh)
+            obj.parent = root
+            context.collection.objects.link(obj)
+
+        _create_helpers(pm, context, root)
+        context.view_layer.objects.active = root
+        root.select_set(True)
+
+        print(f"Imported PM (split): {model_name} ({len(pm.materials)} parts, "
+              f"{len(pm.helpers)} helpers)")
+        return root
+    else:
+        # Single mesh
+        bm = _build_bmesh(pm, bl_verts)
+        mesh = bpy.data.meshes.new(model_name)
+        for bl_mat in bl_materials:
+            mesh.materials.append(bl_mat)
+        bm.to_mesh(mesh)
+        bm.free()
+
+        if pm.normals:
+            bl_normals = [d3d_normal_to_blender(*n) for n in pm.normals]
+            mesh.normals_split_custom_set_from_vertices(bl_normals)
+            mesh.use_auto_smooth = True
+
+        mesh.update()
+
+        obj = bpy.data.objects.new(model_name, mesh)
+        context.collection.objects.link(obj)
+        context.view_layer.objects.active = obj
+        obj.select_set(True)
+
+        _create_helpers(pm, context, obj)
+
+        print(f"Imported PM: {model_name} ({len(pm.vertices)} verts, "
+              f"{len(pm.triangles)} tris, {len(pm.helpers)} helpers)")
+        return obj
 
 
 # ── Operator ──────────────────────────────────────────────────────────────
@@ -252,14 +311,23 @@ class IMPORT_OT_autothief_pm(bpy.types.Operator, ImportHelper):
         default=True,
     )
 
+    split_by_material: BoolProperty(
+        name="Split by Material",
+        description="Create separate objects for each material (body, glass, interior, etc.)",
+        default=False,
+    )
+
     def execute(self, context):
         try:
-            import_pm(self.filepath, context, self.import_textures)
+            import_pm(self.filepath, context, self.import_textures, self.split_by_material)
             return {'FINISHED'}
         except Exception as e:
             self.report({'ERROR'}, str(e))
+            import traceback
+            traceback.print_exc()
             return {'CANCELLED'}
 
     def draw(self, context):
         layout = self.layout
         layout.prop(self, "import_textures")
+        layout.prop(self, "split_by_material")
