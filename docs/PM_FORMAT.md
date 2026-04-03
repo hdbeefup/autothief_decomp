@@ -216,22 +216,41 @@ Count:  helper_count (from header)
 Stride: 76 bytes (0x4C)
 ```
 
-| Offset | Size | Type   | Description |
-|--------|------|--------|-------------|
-| 0      | 32   | char[] | Null-terminated ASCII name |
-| 32     | 44   | -      | Helper-specific data (positions, references, etc.) |
+| Offset | Size | Type     | Description |
+|--------|------|----------|-------------|
+| 0x00   | 32   | char[32] | Null-terminated ASCII name |
+| 0x20   | 32   | byte[32] | Mixed data (vertex indices, flags — varies by helper type) |
+| 0x40   | 4    | float    | Position X |
+| 0x44   | 4    | float    | Position Y |
+| 0x48   | 4    | float    | Position Z |
 
-Helpers represent named attachment points, bones, or special objects within the model. Common names observed:
+Helpers are named attachment points used by the game engine for vehicle physics, doors, lights, and character placement. The game matches helper names using case-insensitive string comparison (`_stricmp`).
 
-| Name Pattern | Purpose |
-|-------------|---------|
-| `Exhaust` | Vehicle exhaust position |
-| `Driver` / `Driver_outpt` | Driver seat / exit point |
-| `doorleft` | Door attachment |
-| `headlight` / `backlight` | Light positions |
-| `PHYS_WHEEL_FL_LINK` etc. | Wheel physics attachment points (FL/FR/BL/BR) |
+### Known Helper Names
 
-The 44 bytes of helper data appear to contain a mix of vertex indices (uint32), position data (floats), and flags, but the exact layout varies by helper type.
+| Name | Purpose |
+|------|---------|
+| `PHYS_WHEEL_FL_LINK` | Front-left wheel physics attachment |
+| `PHYS_WHEEL_FR_LINK` | Front-right wheel physics attachment |
+| `PHYS_WHEEL_BL_LINK` | Back-left wheel physics attachment |
+| `PHYS_WHEEL_BR_LINK` | Back-right wheel physics attachment |
+| `doorleft` | Left door pivot/attachment |
+| `doorright` | Right door pivot/attachment |
+| `hood` | Engine hood pivot |
+| `boot` | Trunk/boot pivot |
+| `headlight` | Headlight position (may appear multiple times) |
+| `backlight` | Taillight position (may appear multiple times) |
+| `siren` | Siren/emergency light position (may appear multiple times) |
+| `frontlights` | Front light group position |
+| `Exhaust` | Exhaust particle spawn point |
+| `Driver` | Driver seat position and orientation |
+| `Driver_outpt` | Driver exit/entry point |
+| `Passenger` | Passenger seat position |
+| `Passenger_outpt` | Passenger exit/entry point |
+| `fpcamera` | First-person camera position |
+| `marker` | Generic marker point |
+
+The 32 bytes of mixed data at offset 0x20 contain vertex indices and flags whose layout varies by helper type. Their exact structure is not fully understood.
 
 ---
 

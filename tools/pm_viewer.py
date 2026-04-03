@@ -27,7 +27,7 @@ class PMModel:
         self.vertices = []       # list of (x, y, z)
         self.triangles = []      # list of (i0, i1, i2, u1, v1, u2, v2, u3, v3, nx, ny, nz, mat_idx)
         self.materials = []      # list of texture path strings
-        self.helpers = []
+        self.helpers = []        # list of (name, x, y, z) — parsed helpers
         self.vertex_indices = [] # per-vertex ushort (when flags bit 0 clear)
         self.normals = []        # per-vertex (nx, ny, nz) (when flags bit 1 set)
 
@@ -100,9 +100,12 @@ class PMModel:
             if m.flags & 4:
                 f.read(tri_count * 32)  # skip for now
 
-            # Helpers BEFORE materials in file order
+            # Helpers BEFORE materials: 76 bytes each (name[32] + data[32] + pos[12])
             for _ in range(helper_count):
-                m.helpers.append(f.read(76))
+                hdata = f.read(76)
+                hname = hdata[:32].split(b'\x00')[0].decode('ascii', errors='replace')
+                hx, hy, hz = struct.unpack_from('<fff', hdata, 0x40)
+                m.helpers.append((hname, -hx, hy, hz))  # negate X: LH → RH
 
             # Materials: mat_count * 80 bytes (texture path string)
             for _ in range(mat_count):
@@ -457,6 +460,13 @@ class PMViewer:
         self.skel_point_count = 0
         self.skel_program = 0
 
+        # Helper visualization
+        self.show_helpers = True
+        self.helper_vao = 0
+        self.helper_vbo = 0
+        self.helper_vert_count = 0
+        self.helper_labels = []      # list of pyglet.text.Label
+
         # Compile shaders
         self._compile_shaders()
         self._compile_skel_shaders()
@@ -534,6 +544,59 @@ class PMViewer:
             print(f"  Animations found ({self.anim_char_name}): {', '.join(self.anim_names)}")
         else:
             print(f"  No animations found for this model")
+
+    def _build_helper_geometry(self):
+        """Build cross markers for helpers using the skeleton shader."""
+        if not self.model or not self.model.helpers:
+            self.helper_vert_count = 0
+            self.helper_labels = []
+            return
+
+        cross_size = 3.0
+        verts = []  # position(3) + color(3) per vertex
+        self.helper_labels = []
+
+        for hname, hx, hy, hz in self.model.helpers:
+            # Cross marker: 3 lines (6 verts) in cyan
+            r, g, b = 0.2, 0.9, 1.0
+            for axis in range(3):
+                for sign in (-1, 1):
+                    dx = cross_size * sign if axis == 0 else 0
+                    dy = cross_size * sign if axis == 1 else 0
+                    dz = cross_size * sign if axis == 2 else 0
+                    verts.extend([hx + dx, hy + dy, hz + dz, r, g, b])
+
+            # Store label info for 2D text rendering
+            self.helper_labels.append((hname, hx, hy, hz))
+
+        self.helper_vert_count = len(verts) // 6
+
+        if not verts:
+            return
+
+        if not self.helper_vao:
+            vao = gl.GLuint()
+            gl.glGenVertexArrays(1, ctypes.byref(vao))
+            self.helper_vao = vao.value
+            vbo = gl.GLuint()
+            gl.glGenBuffers(1, ctypes.byref(vbo))
+            self.helper_vbo = vbo.value
+
+        gl.glBindVertexArray(self.helper_vao)
+        gl.glBindBuffer(gl.GL_ARRAY_BUFFER, self.helper_vbo)
+        data = (gl.GLfloat * len(verts))(*verts)
+        gl.glBufferData(gl.GL_ARRAY_BUFFER, ctypes.sizeof(data), data, gl.GL_STATIC_DRAW)
+        stride = 6 * 4
+        gl.glVertexAttribPointer(0, 3, gl.GL_FLOAT, gl.GL_FALSE, stride, None)
+        gl.glEnableVertexAttribArray(0)
+        offset_ptr = ctypes.c_void_p(3 * 4)
+        gl.glVertexAttribPointer(1, 3, gl.GL_FLOAT, gl.GL_FALSE, stride, offset_ptr)
+        gl.glEnableVertexAttribArray(1)
+        gl.glBindVertexArray(0)
+
+        print(f"  Helpers: {len(self.model.helpers)}")
+        for hname, hx, hy, hz in self.model.helpers:
+            print(f"    {hname}: ({hx:.1f}, {hy:.1f}, {hz:.1f})")
 
     def _compute_bone_assignments(self):
         """Assign each model vertex to its nearest bone using frame 0 positions."""
@@ -681,7 +744,7 @@ class PMViewer:
     def _update_info_label(self):
         fname = os.path.basename(self.pm_path)
         m = self.model
-        info = f"{fname}  |  {len(m.vertices)} verts, {len(m.triangles)} tris, {len(m.materials)} mats"
+        info = f"{fname}  |  {len(m.vertices)} verts, {len(m.triangles)} tris, {len(m.materials)} mats, {len(m.helpers)} helpers"
         if self.anim_names:
             anim_name = self.anim_names[self.current_anim_idx] if self.current_anim_idx >= 0 else "none"
             status = "playing" if self.anim_playing else "paused"
@@ -692,7 +755,7 @@ class PMViewer:
                 frame = int(self.anim_time) if self.current_anim else 0
                 total = self.current_anim.frame_count if self.current_anim else 0
                 info += f"  {status}  frame {frame}/{total}"
-            info += f"\n[A/D] prev/next anim  [Space] play/pause  [S] skeleton"
+            info += f"\n[A/D] prev/next anim  [Space] play/pause  [S] skeleton  [H] helpers"
         self.info_label.text = info
         self.info_label.width = self.window.width - 16
 
@@ -890,6 +953,7 @@ class PMViewer:
 
         # Discover animations
         self._discover_animations()
+        self._build_helper_geometry()
         self._update_info_label()
 
         # Compute bounding sphere
@@ -1029,15 +1093,55 @@ class PMViewer:
             gl.glBindVertexArray(0)
             gl.glUseProgram(0)
 
-        # Draw info text overlay
+        # Draw helper markers
+        if self.show_helpers and self.helper_vao and self.helper_vert_count:
+            gl.glUseProgram(self.skel_program)
+            gl.glUniformMatrix4fv(self.su_projection, 1, gl.GL_FALSE, proj_arr)
+            gl.glUniformMatrix4fv(self.su_view, 1, gl.GL_FALSE, view_arr)
+            gl.glBindVertexArray(self.helper_vao)
+            gl.glDisable(gl.GL_DEPTH_TEST)
+            gl.glLineWidth(2.0)
+            gl.glDrawArrays(gl.GL_LINES, 0, self.helper_vert_count)
+            gl.glEnable(gl.GL_DEPTH_TEST)
+            gl.glBindVertexArray(0)
+            gl.glUseProgram(0)
+
+        # Draw info text overlay and helper labels
         gl.glDisable(gl.GL_DEPTH_TEST)
         gl.glDisable(gl.GL_CULL_FACE)
         gl.glEnable(gl.GL_BLEND)
         gl.glBlendFunc(gl.GL_SRC_ALPHA, gl.GL_ONE_MINUS_SRC_ALPHA)
         self.info_label.draw()
+
+        # Draw helper name labels projected to screen
+        if self.show_helpers and self.helper_labels:
+            self._draw_helper_labels(proj, view)
+
         gl.glDisable(gl.GL_BLEND)
         gl.glEnable(gl.GL_CULL_FACE)
         gl.glEnable(gl.GL_DEPTH_TEST)
+
+    def _draw_helper_labels(self, proj, view):
+        """Project helper positions to screen and draw name labels."""
+        w, h = self.window.width, self.window.height
+        # Compute MVP manually for projection
+        mvp = proj @ view
+        for hname, hx, hy, hz in self.helper_labels:
+            # Project 3D → clip → NDC → screen
+            cx = mvp[0]*hx + mvp[4]*hy + mvp[8]*hz + mvp[12]
+            cy = mvp[1]*hx + mvp[5]*hy + mvp[9]*hz + mvp[13]
+            cw = mvp[3]*hx + mvp[7]*hy + mvp[11]*hz + mvp[15]
+            if cw <= 0.01:
+                continue  # behind camera
+            ndx = cx / cw
+            ndy = cy / cw
+            sx = int((ndx * 0.5 + 0.5) * w)
+            sy = int((ndy * 0.5 + 0.5) * h)
+            if 0 <= sx < w and 0 <= sy < h:
+                label = pyglet.text.Label(
+                    hname, font_size=9, x=sx + 8, y=sy,
+                    color=(50, 230, 255, 200), anchor_y='center')
+                label.draw()
 
     def on_mouse_press(self, x, y, button, modifiers):
         if button == pyglet.window.mouse.LEFT:
@@ -1082,6 +1186,8 @@ class PMViewer:
             self._reset_camera()
         elif symbol == pyglet.window.key.S:
             self.show_skeleton = not self.show_skeleton
+        elif symbol == pyglet.window.key.H:
+            self.show_helpers = not self.show_helpers
         elif symbol == pyglet.window.key.SPACE:
             if self.current_anim:
                 self.anim_playing = not self.anim_playing
@@ -1129,6 +1235,16 @@ class PMViewer:
             buf = gl.GLuint(self.skel_vbo)
             gl.glDeleteBuffers(1, ctypes.byref(buf))
             self.skel_vbo = 0
+        # Clean up helper GL objects
+        if self.helper_vao:
+            vao = gl.GLuint(self.helper_vao)
+            gl.glDeleteVertexArrays(1, ctypes.byref(vao))
+            self.helper_vao = 0
+        if self.helper_vbo:
+            buf = gl.GLuint(self.helper_vbo)
+            gl.glDeleteBuffers(1, ctypes.byref(buf))
+            self.helper_vbo = 0
+        self.helper_labels = []
         # Clear texture cache
         for tid in self.tex_cache.values():
             if tid:
@@ -1154,7 +1270,7 @@ def main():
     if len(sys.argv) < 2:
         print("Usage: python pm_viewer.py [model.pm] [textures_root]")
         print("  Drag & drop .pm files onto the window to load them.")
-        print("Controls: LMB=orbit, RMB=pan, Scroll=zoom, W=wireframe, R=reset")
+        print("Controls: LMB=orbit, RMB=pan, Scroll=zoom, W=wireframe, R=reset, H=helpers")
         print("  A/D=prev/next animation, Space=play/pause, S=toggle skeleton")
 
     pm_path = sys.argv[1] if len(sys.argv) > 1 else None

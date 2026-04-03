@@ -408,6 +408,21 @@ class Decompiler:
         if pc + 3 < N and is_cond(pc + 3):
             if self._same_line(chunk, pc + 3, pc) or related_target(pc + 3):
                 return pc + 3
+
+        # Check jump target: if this condition jumps to a location where another
+        # conditional group starts (for multi-line or grouped conditions).
+        if 0 <= my_target < N and my_target > pc:
+            our_end = self._find_end_of_jump(chunk, pc)
+            for delta in [0, 2, 3]:
+                check_pc = my_target + delta
+                if check_pc < N and is_cond(check_pc):
+                    their_end = self._find_end_of_jump(chunk, check_pc)
+                    if their_end == our_end:
+                        return check_pc
+                    if my_target < our_end and their_end > our_end:
+                        return check_pc
+                    break
+
         return -1
 
     def _find_next_condition_pref_jmp(self, chunk, pc):
@@ -597,6 +612,58 @@ class Decompiler:
         """Count locals with endpc == vb_pc."""
         return sum(1 for loc in chunk.locals if loc.endpc == vb_pc)
 
+    @staticmethod
+    def _build_grouped_condition(cond_parts):
+        """Build condition text from [(text, connector), ...] with proper grouping.
+
+        The bytecode pattern for compound conditions produces:
+          or, or, AND, or, AND  for  (A or B or C) and (D or E)
+        Each 'and' terminates an or-group. The last item's connector is always 'and'
+        (the final inverted condition). Groups are separated at and→or transitions.
+
+        Example: [('a>0','or'),('b==1','or'),('c>0','and'),('d==0','or'),('e<0','and')]
+        → Groups: [(a>0, b==1, c>0), (d==0, e<0)] connected by 'and'
+        → Output: '((a>0) or (b==1) or (c>0)) and ((d==0) or (e<0))'
+        """
+        if not cond_parts:
+            return ''
+        if len(cond_parts) == 1:
+            return cond_parts[0][0]
+
+        # Check if all connectors are the same — no grouping needed
+        connectors = set(c for _, c in cond_parts)
+        if len(connectors) == 1:
+            conn = cond_parts[0][1]
+            return f' {conn} '.join(t for t, _ in cond_parts)
+
+        # Mixed connectors: split into groups at 'and' terminators.
+        # Pattern: each group is a run of 'or' conditions ending with one 'and'.
+        # The 'and' is the last condition in the or-group (inverted by the compiler).
+        groups = []
+        cur_group = []
+        for i, (text, conn) in enumerate(cond_parts):
+            cur_group.append(text)
+            if conn == 'and':
+                # This terminates the current group
+                groups.append(cur_group)
+                cur_group = []
+        if cur_group:
+            groups.append(cur_group)
+
+        if len(groups) == 1:
+            return ' or '.join(groups[0])
+
+        # Multiple groups: join items within each group with 'or',
+        # wrap multi-item groups in parens, join groups with 'and'
+        parts = []
+        for group in groups:
+            group_text = ' or '.join(group)
+            if len(group) > 1:
+                group_text = '(' + group_text + ')'
+            parts.append(group_text)
+
+        return ' and '.join(parts)
+
     def _compute_local_slots(self, chunk):
         """Compute VM stack slot for each local entry by simulating the compiler."""
         events = []
@@ -651,7 +718,7 @@ class Decompiler:
         local_slots = self._compute_local_slots(chunk)
 
         # Stack (VM-like, 0-based positions)
-        stack = [SVal('nil', VKind.NIL)] * max(chunk.max_stack_size + 16, 256)
+        stack = [SVal('nil', VKind.NIL)] * max(chunk.max_stack_size * 2 + 32, 512)
         top = 0  # next free slot
 
         # Output
@@ -677,8 +744,9 @@ class Decompiler:
         # Track where 'end' should be emitted (list of vb_pc values)
         end_positions = []
 
-        # Condition accumulator for compound conditions
-        cond_str = ''
+        # Condition accumulator: list of (condition_text, connector_type)
+        # connector_type is 'or' or 'and' — what follows this condition
+        cond_parts = []  # list of (str, str)
 
         # Do-end blocks
         do_pcs, end_pcs_do = self._find_do_end_blocks(chunk)
@@ -834,7 +902,9 @@ class Decompiler:
 
             elif op in (Op.CALL, Op.TAILCALL):
                 func_pos = get_a(ins)  # 0-based stack position of function
-                num_ret = get_b(ins) if op == Op.CALL else 0
+                raw_b = get_b(ins) if op == Op.CALL else 0
+                # B=0: no returns, B=1..254: exact count, B=255: pass-through to next call (treat as 1)
+                num_ret = raw_b if raw_b < 255 else 1
 
                 # Check for locals starting at this instruction (for multi-return)
                 loc_start_idx = self._find_locals_at(chunk, vb_pc)
@@ -876,12 +946,20 @@ class Decompiler:
                     # Statement (no return value)
                     emit(call_expr)
                 else:
-                    # Push return value as expression
+                    # Push num_ret entries to match VM stack.
+                    # First entry has the call expression, rest are placeholders.
+                    # SETLOCAL will process them in reverse order.
                     sv = SVal(call_expr, VKind.EXPR)
                     sv.is_func_ret = True
                     sv.func_ret_count = num_ret
                     stack[top] = sv
                     top += 1
+                    for _j in range(1, num_ret):
+                        placeholder = SVal('', VKind.EXPR)
+                        placeholder.is_func_ret = True
+                        placeholder.func_ret_count = 0  # placeholder marker
+                        stack[top] = placeholder
+                        top += 1
 
             elif op == Op.PUSHNIL:
                 count = get_u(ins)
@@ -983,24 +1061,32 @@ class Decompiler:
 
                 val_text = process_value_for_output()
 
-                # Handle multi-return assignment
+                # Handle multi-return assignment.
+                # Pattern: CALL pushes N values, then N SETLOCALs fire in REVERSE order.
+                # The main SVal (with func_ret_count > 0) is at the bottom of the N entries.
+                # Placeholders (func_ret_count == 0, is_func_ret == True) are above it.
                 sv = peek(0)
-                if sv.is_func_ret and sv.func_ret_count > 0:
-                    # Multi-return: accumulate names
-                    if hasattr(sv, '_accum_names'):
-                        sv._accum_names.append(name)
-                    else:
-                        sv._accum_names = [name]
-                    sv.func_ret_count -= 1
-                    if sv.func_ret_count == 0:
-                        names = ', '.join(sv._accum_names)
-                        emit(f'{names}={sv.text}')
+                if sv.is_func_ret:
+                    # Find the main func-ret entry (the one with func_ret_count > 0)
+                    found_main = False
+                    for k in range(top - 1, -1, -1):
+                        if stack[k].is_func_ret and stack[k].func_ret_count > 0:
+                            main_sv = stack[k]
+                            if not hasattr(main_sv, '_accum_names'):
+                                main_sv._accum_names = []
+                            main_sv._accum_names.append(name)
+                            main_sv.func_ret_count -= 1
+                            pop_val(1)  # pop the current entry (placeholder or last)
+                            if main_sv.func_ret_count == 0:
+                                # All names collected (in reverse). Reverse and emit.
+                                names = ', '.join(reversed(main_sv._accum_names))
+                                emit(f'{names}={main_sv.text}')
+                                # Main entry should already be popped (it was the last one)
+                            found_main = True
+                            break
+                    if not found_main:
+                        emit(f'{name}={val_text}')
                         pop_val(1)
-                    else:
-                        sv.text = f'{name}, {sv.text}' if not hasattr(sv, '_orig_text') else sv._orig_text
-                        if not hasattr(sv, '_orig_text'):
-                            sv._orig_text = sv.text
-                        stack[top - 1] = sv  # update in place
                 else:
                     emit(f'{name}={val_text}')
                     pop_val(1)
@@ -1020,16 +1106,24 @@ class Decompiler:
                     emit(func_text, semi=False)
                     emit_blank()
                     pop_val(1)
-                elif sv.is_func_ret and sv.func_ret_count > 0:
-                    if not hasattr(sv, '_accum_names'):
-                        sv._accum_names = [name]
-                    else:
-                        sv._accum_names.append(name)
-                    sv.func_ret_count -= 1
-                    if sv.func_ret_count == 0:
-                        names = ', '.join(sv._accum_names)
-                        emit(f'{names}={sv.text}')
-                        pop_val(1)
+                elif sv.is_func_ret:
+                    pop_val(1)
+                    found_main = False
+                    for k in range(top - 1, -1, -1):
+                        if stack[k].is_func_ret and stack[k].func_ret_count > 0:
+                            main_sv = stack[k]
+                            if not hasattr(main_sv, '_accum_names'):
+                                main_sv._accum_names = []
+                            main_sv._accum_names.append(name)
+                            main_sv.func_ret_count -= 1
+                            if main_sv.func_ret_count == 0:
+                                names = ', '.join(reversed(main_sv._accum_names))
+                                emit(f'{names}={main_sv.text}')
+                                pop_val(1)
+                            found_main = True
+                            break
+                    if not found_main:
+                        emit(f'{name}={process_value_for_output()}')
                 else:
                     val_text = process_value_for_output()
                     emit(f'{name}={val_text}')
@@ -1188,52 +1282,48 @@ class Decompiler:
                 if pc + 1 < N and get_op(ins_list[pc + 1]) == Op.PUSHNILJMP:
                     right = peek(0).text
                     left = peek(1).text
-                    result = cond_str + f'({left}{cmp_op}{right})'
+                    prev_text = self._build_grouped_condition(cond_parts) if cond_parts else ''
+                    result = prev_text + f'({left}{cmp_op}{right})'
                     pop_val(2)
                     push_val(SVal(result, VKind.EXPR), vb_pc)
-                    cond_str = ''
+                    cond_parts = []
                     jump_types.pop()
                     pc += 2  # skip PUSHNILJMP and PUSHINT
                     pc += 1
                     continue
 
-                # Build condition text
+                # Build condition part
                 jt = jump_types[-1]
+                is_or = self._find_or_presence(chunk, pc)
+
                 if jt == 'c':
-                    if self._find_or_presence(chunk, pc):
-                        # 'or': don't reverse condition
+                    if is_or:
                         right = peek(0).text
                         left = peek(1).text
-                        cond_str += f'({left}{cmp_op}{right}) or '
+                        cond_parts.append((f'({left}{cmp_op}{right})', 'or'))
                     else:
-                        # 'and': reverse condition
                         rev_op = CMP_REVERSE.get(cmp_op, cmp_op)
                         right = peek(0).text
                         left = peek(1).text
-                        cond_str += f'({left}{rev_op}{right}) and '
+                        cond_parts.append((f'({left}{rev_op}{right})', 'and'))
                 else:  # while
-                    if self._find_or_presence(chunk, pc) or next_cond < 0:
+                    if is_or or next_cond < 0:
                         rev_op = CMP_REVERSE.get(cmp_op, cmp_op)
                         right = peek(0).text
                         left = peek(1).text
-                        cond_str += f'({left}{rev_op}{right}) and '
+                        cond_parts.append((f'({left}{rev_op}{right})', 'and'))
                     else:
                         right = peek(0).text
                         left = peek(1).text
-                        cond_str += f'({left}{cmp_op}{right}) or '
+                        cond_parts.append((f'({left}{cmp_op}{right})', 'or'))
 
                 if next_cond >= 0:
                     # More conditions follow, don't emit yet
                     jump_types.pop()
                 else:
-                    # Last condition in chain, emit the statement
+                    # Last condition in chain — build grouped text and emit
                     jt = jump_types[-1]
-                    # Trim trailing ' and ' or ' or '
-                    cond_text = cond_str.rstrip()
-                    if cond_text.endswith(' and'):
-                        cond_text = cond_text[:-4]
-                    elif cond_text.endswith(' or'):
-                        cond_text = cond_text[:-3]
+                    cond_text = self._build_grouped_condition(cond_parts)
 
                     is_elseif = self._find_elseif_presence(chunk, pc)
                     prefix = 'else' if is_elseif else ''
@@ -1244,7 +1334,7 @@ class Decompiler:
                         emit(f'{prefix}while {cond_text} do', semi=False)
 
                     level += 1
-                    cond_str = ''
+                    cond_parts = []
 
                     # Track where 'end' goes
                     target = pc + 1 + get_s(ins)
@@ -1274,15 +1364,15 @@ class Decompiler:
                 if next_cond >= 0:
                     jt = jump_types[-1]
                     if self._find_or_presence(chunk, pc):
-                        cond_str += cond_part + ' and '
+                        cond_parts.append((cond_part.strip(), 'and'))
                     else:
-                        cond_str += ' not ' + cond_part + ' or '
+                        cond_parts.append((' not ' + cond_part, 'or'))
                     jump_types.pop()
                 else:
-                    cond_str += cond_part
+                    cond_parts.append((cond_part.strip(), 'and'))  # last gets trimmed anyway
                     jt = jump_types[-1]
 
-                    cond_text = cond_str.strip()
+                    cond_text = self._build_grouped_condition(cond_parts)
                     # Clean up double negations
                     while 'not not' in cond_text:
                         cond_text = cond_text.replace('not not', '')
@@ -1299,7 +1389,7 @@ class Decompiler:
                         emit(f'{prefix}while {cond_text} do', semi=False)
 
                     level += 1
-                    cond_str = ''
+                    cond_parts = []
 
                     target = pc + 1 + get_s(ins)
                     if target < N:
