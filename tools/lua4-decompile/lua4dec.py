@@ -615,6 +615,47 @@ class Decompiler:
                 wrapped.append(part)
         return ' or '.join(wrapped)
 
+    @staticmethod
+    def _add_grouping_parens(cond_text):
+        """Add parentheses when condition has mixed and/or without grouping.
+
+        Handles both patterns:
+          OR-of-ANDs: '(A) and (B) or (C) and (D)' → '((A) and (B)) or ((C) and (D))'
+          AND-of-ORs: '(A) or (B) or (C) and (D) or (E)' → '((A) or (B) or (C)) and ((D) or (E))'
+        """
+        if ' and ' not in cond_text or ' or ' not in cond_text:
+            return cond_text  # no mixing, no grouping needed
+
+        # Determine which pattern: count transitions between and/or
+        # Split into tokens, find the connectors
+        # Use a simple approach: split on ' or ' first, check if pieces have ' and '
+        or_parts = cond_text.split(' or ')
+        and_parts = cond_text.split(' and ')
+
+        if len(or_parts) > len(and_parts):
+            # More OR segments → AND-of-ORs: group OR segments, join with AND
+            # Split on ' and ' to get the AND groups
+            groups = cond_text.split(' and ')
+            wrapped = []
+            for g in groups:
+                g = g.strip()
+                if ' or ' in g:
+                    wrapped.append('(' + g + ')')
+                else:
+                    wrapped.append(g)
+            return ' and '.join(wrapped)
+        else:
+            # More AND segments → OR-of-ANDs: group AND segments, join with OR
+            groups = cond_text.split(' or ')
+            wrapped = []
+            for g in groups:
+                g = g.strip()
+                if ' and ' in g:
+                    wrapped.append('(' + g + ')')
+                else:
+                    wrapped.append(g)
+            return ' or '.join(wrapped)
+
     def _find_elseif_presence(self, chunk, pc):
         """Check if this conditional jump is an elseif."""
         ins = chunk.instructions
@@ -1408,6 +1449,8 @@ class Decompiler:
                             cond_text = cond_text[:-4]
                         elif cond_text.endswith(' or'):
                             cond_text = cond_text[:-3]
+                        # Add grouping parentheses for mixed and/or
+                        cond_text = self._add_grouping_parens(cond_text)
 
                         is_elseif = self._find_elseif_presence(chunk, pc)
                         prefix = 'else' if is_elseif else ''
@@ -1460,6 +1503,8 @@ class Decompiler:
                     while '  ' in cond_text:
                         cond_text = cond_text.replace('  ', ' ')
                     cond_text = cond_text.strip()
+                    # Add grouping parentheses for mixed and/or
+                    cond_text = self._add_grouping_parens(cond_text)
 
                     is_elseif = self._find_elseif_presence(chunk, pc)
                     prefix = 'else' if is_elseif else ''
