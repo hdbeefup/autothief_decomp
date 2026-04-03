@@ -1,1 +1,4 @@
 /tools/lua4-decompile/CFLuaDC-Lua4-Decompiler-main
+*.pyc
+/decomp/ida pro
+blender/io_import_autothief.zip
