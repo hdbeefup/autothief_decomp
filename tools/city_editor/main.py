@@ -47,71 +47,6 @@ def d3d_to_gl(x, y, z):
     return (-x, y, z)
 
 
-# ── Road extrusion ─────────────────────────────────────────────────────────
-
-def extrude_road_segment(vertices, half_width, is_closed):
-    """Extrude a polyline into a flat road strip. Returns (positions, normals, uvs)."""
-    n = len(vertices)
-    if n < 2:
-        return [], [], []
-
-    # Convert all vertices to GL coords
-    pts = [d3d_to_gl(*v) for v in vertices]
-
-    # Compute perpendicular directions (in XZ plane)
-    perps = []
-    for i in range(n):
-        if i == 0:
-            dx = pts[1][0] - pts[0][0]
-            dz = pts[1][2] - pts[0][2]
-        elif i == n - 1:
-            dx = pts[n - 1][0] - pts[n - 2][0]
-            dz = pts[n - 1][2] - pts[n - 2][2]
-        else:
-            dx = pts[i + 1][0] - pts[i - 1][0]
-            dz = pts[i + 1][2] - pts[i - 1][2]
-        ln = math.sqrt(dx * dx + dz * dz)
-        if ln > 1e-6:
-            dx /= ln
-            dz /= ln
-        perps.append((-dz, dx))  # perpendicular in XZ
-
-    # Build left/right edge vertices
-    left = []
-    right = []
-    for i, (px, py, pz) in enumerate(pts):
-        nx, nz = perps[i]
-        left.append((px + nx * half_width, py, pz + nz * half_width))
-        right.append((px - nx * half_width, py, pz - nz * half_width))
-
-    # Triangulate strip
-    positions = []
-    normals = []
-    uvs = []
-    up = (0.0, 1.0, 0.0)
-
-    seg_count = n if is_closed else n - 1
-    for i in range(seg_count):
-        j = (i + 1) % n
-        l0, l1 = left[i], left[j]
-        r0, r1 = right[i], right[j]
-
-        # Two triangles per quad: l0-r0-r1, l0-r1-l1
-        for tri in [(l0, r0, r1), (l0, r1, l1)]:
-            for v in tri:
-                positions.extend(v)
-                normals.extend(up)
-            # Simple UV mapping along road length
-            u0 = i / max(seg_count, 1)
-            u1 = j / max(seg_count, 1)
-            uvs.extend([u0, 0.0, u0, 1.0, u1, 1.0])
-
-        for tri in [(l0, r1, l1)]:
-            pass  # already added above
-        # Fix UVs for second triangle
-        uvs[-6:] = [u0, 0.0, u1, 1.0, u1, 0.0]
-
-    return positions, normals, uvs
 
 
 # ── Model cache ────────────────────────────────────────────────────────────
@@ -196,7 +131,6 @@ class CityEditor:
         # Display toggles
         self.show_wireframe = False
         self.show_grid = True
-        self.show_roads = True
         self.show_models = True
         self.show_junctions = True
         self.show_connections = True
@@ -220,8 +154,12 @@ class CityEditor:
         self.tex_cache = TextureCache(textures_root)
         self.model_cache = ModelCache(models_root, self.tex_cache)
 
-        # Road mesh
-        self.road_mesh = None  # GPUMesh for all road surfaces
+        # Terrain mesh
+        self.terrain_mesh = None
+        self.show_terrain = True
+        # Building shape outlines (polylines from .city "segments" — extruded into 3D buildings by engine)
+        self.building_lines = GPULines()
+        self.show_buildings = True
         # Junction/connection lines
         self.junction_lines = GPULines()
         self.connection_lines = GPULines()
@@ -246,7 +184,8 @@ class CityEditor:
         print(f"  Segments: {len(c.segments)}, Junctions: {len(c.junctions)}, "
               f"Connections: {len(c.connections)}, Models: {len(c.models)}")
 
-        self._build_road_mesh()
+        self._build_terrain_mesh()
+        self._build_building_outlines()
         self._build_junction_markers()
         self._build_connection_lines()
         self._load_model_instances()
@@ -254,32 +193,140 @@ class CityEditor:
         self._fit_camera()
         self._update_info()
 
-    def _build_road_mesh(self):
-        """Extrude all road segments into a single mesh."""
-        c = self.city
-        all_pos = []
-        all_nrm = []
-        all_uv = []
+    def _build_terrain_mesh(self):
+        """Build terrain mesh from heightmap BMP + color texture."""
+        hmap_path = os.path.join(self.game_root, 'Textures', 'Terrain', 'city', 'cityHMap.bmp')
+        color_path = os.path.join(self.game_root, 'Textures', 'Terrain', 'city', 'city.dds')
 
-        road_widths = {0: 400.0, 1: 250.0, 3: 600.0}
-
-        for seg in c.segments:
-            hw = road_widths.get(seg.road_type, 400.0) * 0.5
-            pos, nrm, uv = extrude_road_segment(seg.vertices, hw, seg.is_closed)
-            all_pos.extend(pos)
-            all_nrm.extend(nrm)
-            all_uv.extend(uv)
-
-        if not all_pos:
+        if not os.path.exists(hmap_path):
+            print(f"  Terrain heightmap not found: {hmap_path}")
             return
 
-        # Build GPUMesh manually (no texture, single group)
+        from PIL import Image
+        hmap_img = Image.open(hmap_path)
+        hmap = hmap_img.load()
+        hmap_w, hmap_h = hmap_img.size  # 1024x1024
+
+        # Terrain parameters from sanjose.lua InsertTerrain() call
+        pixel_scale = 800.0    # world units per pixel
+        height_scale = 200.0   # height multiplier
+
+        # Subsample for performance: step=4 -> 256x256 grid
+        step = 4
+        grid_w = hmap_w // step
+        grid_h = hmap_h // step
+
+        # Build height grid
+        heights = []
+        for row in range(grid_h + 1):
+            row_heights = []
+            for col in range(grid_w + 1):
+                px = min(col * step, hmap_w - 1)
+                py = min(row * step, hmap_h - 1)
+                row_heights.append(hmap[px, py] * height_scale)
+            heights.append(row_heights)
+
+        # Build triangle mesh
+        positions = []
+        normals = []
+        uvs = []
+
+        for row in range(grid_h):
+            for col in range(grid_w):
+                # Four corners of this grid cell (in D3D world coords)
+                x0 = col * step * pixel_scale
+                x1 = (col + 1) * step * pixel_scale
+                z0 = row * step * pixel_scale
+                z1 = (row + 1) * step * pixel_scale
+                y00 = heights[row][col]
+                y10 = heights[row][col + 1]
+                y01 = heights[row + 1][col]
+                y11 = heights[row + 1][col + 1]
+
+                # Convert to GL coords (negate X)
+                v00 = d3d_to_gl(x0, y00, z0)
+                v10 = d3d_to_gl(x1, y10, z0)
+                v01 = d3d_to_gl(x0, y01, z1)
+                v11 = d3d_to_gl(x1, y11, z1)
+
+                # UV mapping to color texture
+                u0 = col / grid_w
+                u1 = (col + 1) / grid_w
+                v0_uv = row / grid_h
+                v1_uv = (row + 1) / grid_h
+
+                # Triangle 1: v00, v10, v11
+                n1 = compute_face_normal(v00, v10, v11)
+                positions.extend([*v00, *v10, *v11])
+                normals.extend([*n1, *n1, *n1])
+                uvs.extend([u0, v0_uv, u1, v0_uv, u1, v1_uv])
+
+                # Triangle 2: v00, v11, v01
+                n2 = compute_face_normal(v00, v11, v01)
+                positions.extend([*v00, *v11, *v01])
+                normals.extend([*n2, *n2, *n2])
+                uvs.extend([u0, v0_uv, u1, v1_uv, u0, v1_uv])
+
+        # Load color texture
+        tex_id = 0
+        if os.path.exists(color_path):
+            try:
+                img = Image.open(color_path)
+                if img.mode != 'RGBA':
+                    img = img.convert('RGBA')
+                raw = img.tobytes()
+                tid = gl.GLuint()
+                gl.glGenTextures(1, ctypes.byref(tid))
+                gl.glBindTexture(gl.GL_TEXTURE_2D, tid.value)
+                gl.glTexParameteri(gl.GL_TEXTURE_2D, gl.GL_TEXTURE_MIN_FILTER, gl.GL_LINEAR_MIPMAP_LINEAR)
+                gl.glTexParameteri(gl.GL_TEXTURE_2D, gl.GL_TEXTURE_MAG_FILTER, gl.GL_LINEAR)
+                gl.glTexParameteri(gl.GL_TEXTURE_2D, gl.GL_TEXTURE_WRAP_S, gl.GL_CLAMP_TO_EDGE)
+                gl.glTexParameteri(gl.GL_TEXTURE_2D, gl.GL_TEXTURE_WRAP_T, gl.GL_CLAMP_TO_EDGE)
+                gl.glTexImage2D(gl.GL_TEXTURE_2D, 0, gl.GL_RGBA8, img.width, img.height,
+                                0, gl.GL_RGBA, gl.GL_UNSIGNED_BYTE, raw)
+                gl.glGenerateMipmap(gl.GL_TEXTURE_2D)
+                gl.glBindTexture(gl.GL_TEXTURE_2D, 0)
+                tex_id = tid.value
+            except Exception as e:
+                print(f"  Warning: terrain texture: {e}")
+
         mesh = GPUMesh()
-        mesh.vertex_count = len(all_pos) // 3
-        mesh.mat_groups = [(0, 0, mesh.vertex_count)]
-        mesh._upload(all_pos, all_nrm, all_uv)
-        self.road_mesh = mesh
-        print(f"  Road mesh: {mesh.vertex_count} vertices")
+        mesh.vertex_count = len(positions) // 3
+        mesh.mat_groups = [(tex_id, 0, mesh.vertex_count)]
+        mesh._upload(positions, normals, uvs)
+        self.terrain_mesh = mesh
+        print(f"  Terrain mesh: {mesh.vertex_count} vertices ({grid_w}x{grid_h} grid), "
+              f"texture={'yes' if tex_id else 'no'}")
+
+    def _build_building_outlines(self):
+        """Build wireframe outlines for building shape polylines (city segments).
+        These are footprints that the game engine extrudes into 3D buildings via ExtrudeShapes.
+        """
+        c = self.city
+        line_verts = []
+
+        # Color by building type
+        type_colors = {
+            0: (0.3, 0.8, 0.3),   # normal — green
+            1: (0.8, 0.8, 0.3),   # minor — yellow
+            3: (0.8, 0.3, 0.3),   # highway/special — red
+        }
+
+        for seg in c.segments:
+            r, g, b = type_colors.get(seg.road_type, (0.5, 0.5, 0.5))
+            verts = seg.vertices
+            n = len(verts)
+            count = n if seg.is_closed else n - 1
+            for i in range(count):
+                j = (i + 1) % n
+                ax, ay, az = d3d_to_gl(*verts[i])
+                bx, by, bz = d3d_to_gl(*verts[j])
+                # Offset Y slightly above terrain to avoid z-fighting
+                line_verts.extend([ax, ay + 20, az, r, g, b])
+                line_verts.extend([bx, by + 20, bz, r, g, b])
+
+        self.building_lines.upload(line_verts)
+        print(f"  Building outlines: {len(c.segments)} shapes ({len(line_verts)//12} line segments)")
 
     def _build_junction_markers(self):
         """Build point markers for junctions."""
@@ -409,13 +456,14 @@ class CityEditor:
         lines = [
             f"{name}  |  {len(c.segments)} roads, {len(c.junctions)} junctions, "
             f"{len(c.connections)} connections, {len(c.models)} models",
-            f"[1] Roads {'ON' if self.show_roads else 'off'}  "
+            f"[T] Terrain {'ON' if self.show_terrain else 'off'}  "
+            f"[1] Buildings {'ON' if self.show_buildings else 'off'}  "
             f"[2] Models {'ON' if self.show_models else 'off'}  "
             f"[3] Connections {'ON' if self.show_connections else 'off'}  "
             f"[J] Junctions {'ON' if self.show_junctions else 'off'}",
             f"[W] Wireframe {'ON' if self.show_wireframe else 'off'}  "
             f"[G] Grid {'ON' if self.show_grid else 'off'}  "
-            f"[R] Reset  |  Arrows=move  Q/E=up/down  LMB=orbit  RMB=pan  Scroll=zoom",
+            f"[R] Reset  |  Arrows=move  Q/E=up/down  Shift=fast  LMB=orbit  RMB=pan  Scroll=zoom",
         ]
         self.info_label.text = '\n'.join(lines)
         self.info_label.width = self.window.width - 16
@@ -441,11 +489,13 @@ class CityEditor:
         gl.glUniform3f(self.u_light, 0.4, 0.7, 0.5)
         gl.glUniform1i(self.u_wire, 0)
 
-        # Roads
-        if self.show_roads and self.road_mesh:
+        # Terrain — draw first, disable culling (visible from all angles on slopes)
+        if self.show_terrain and self.terrain_mesh:
+            gl.glDisable(gl.GL_CULL_FACE)
             set_mat4(self.u_model, identity)
-            gl.glUniform4f(self.u_base_color, 0.35, 0.35, 0.38, 1.0)
-            self.road_mesh.draw(self.mesh_program, self.u_has_tex)
+            gl.glUniform4f(self.u_base_color, 0.5, 0.45, 0.35, 1.0)
+            self.terrain_mesh.draw(self.mesh_program, self.u_has_tex)
+            gl.glEnable(gl.GL_CULL_FACE)
 
         # Building models — cull front faces because X-negation flips winding
         if self.show_models:
@@ -456,20 +506,6 @@ class CityEditor:
                 gpu_mesh.draw(self.mesh_program, self.u_has_tex)
             gl.glCullFace(gl.GL_BACK)
 
-        # Wireframe overlay
-        if self.show_wireframe:
-            gl.glUniform1i(self.u_wire, 1)
-            gl.glUniform1i(self.u_has_tex, 0)
-            gl.glPolygonMode(gl.GL_FRONT_AND_BACK, gl.GL_LINE)
-            gl.glDisable(gl.GL_CULL_FACE)
-            if self.show_roads and self.road_mesh:
-                set_mat4(self.u_model, identity)
-                gl.glBindVertexArray(self.road_mesh.vao)
-                gl.glDrawArrays(gl.GL_TRIANGLES, 0, self.road_mesh.vertex_count)
-                gl.glBindVertexArray(0)
-            gl.glPolygonMode(gl.GL_FRONT_AND_BACK, gl.GL_FILL)
-            gl.glEnable(gl.GL_CULL_FACE)
-
         gl.glUseProgram(0)
 
         # ── Draw lines/points ─────────────────────────────────────
@@ -479,6 +515,10 @@ class CityEditor:
 
         if self.show_grid:
             self.grid_lines.draw(line_width=1.0)
+
+        # Building shape outlines (the polylines from .city segments)
+        if self.show_buildings:
+            self.building_lines.draw(line_width=1.5)
 
         if self.show_junctions:
             gl.glDisable(gl.GL_DEPTH_TEST)
@@ -558,11 +598,13 @@ class CityEditor:
         elif symbol == key.J:
             self.show_junctions = not self.show_junctions
         elif symbol == key._1:
-            self.show_roads = not self.show_roads
+            self.show_buildings = not self.show_buildings
         elif symbol == key._2:
             self.show_models = not self.show_models
         elif symbol == key._3:
             self.show_connections = not self.show_connections
+        elif symbol == key.T:
+            self.show_terrain = not self.show_terrain
         self._update_info()
 
     def on_key_release(self, symbol, modifiers):
