@@ -157,9 +157,13 @@ class CityEditor:
         # Terrain mesh
         self.terrain_mesh = None
         self.show_terrain = True
-        # Building shape outlines (polylines from .city "segments" — extruded into 3D buildings by engine)
+        # Building shape outlines + extruded 3D buildings
         self.building_lines = GPULines()
+        self.building_mesh = None
         self.show_buildings = True
+        # Road surfaces between junctions
+        self.road_mesh = None
+        self.show_roads = True
         # Junction/connection lines
         self.junction_lines = GPULines()
         self.connection_lines = GPULines()
@@ -186,6 +190,8 @@ class CityEditor:
 
         self._build_terrain_mesh()
         self._build_building_outlines()
+        self._build_extruded_buildings()
+        self._build_road_surfaces()
         self._build_junction_markers()
         self._build_connection_lines()
         self._load_model_instances()
@@ -217,12 +223,14 @@ class CityEditor:
         grid_h = hmap_h // step
 
         # Build height grid
+        # BMP is stored bottom-up; PIL reads top-down. Game reads bottom-up natively.
+        # So PIL row 0 = game row 1023. We flip Z to correct this.
         heights = []
         for row in range(grid_h + 1):
             row_heights = []
             for col in range(grid_w + 1):
                 px = min(col * step, hmap_w - 1)
-                py = min(row * step, hmap_h - 1)
+                py = min((hmap_h - 1) - min(row * step, hmap_h - 1), hmap_h - 1)
                 row_heights.append(hmap[px, py] * height_scale)
             heights.append(row_heights)
 
@@ -327,6 +335,160 @@ class CityEditor:
 
         self.building_lines.upload(line_verts)
         print(f"  Building outlines: {len(c.segments)} shapes ({len(line_verts)//12} line segments)")
+
+    def _build_extruded_buildings(self):
+        """Extrude building footprint polylines into 3D box buildings with walls and roof."""
+        c = self.city
+        positions = []
+        normals = []
+        uvs = []
+
+        import random as _rand
+
+        for seg in c.segments:
+            verts = seg.vertices
+            n = len(verts)
+            if n < 3:
+                continue
+
+            # Seed RNG from segment ID for deterministic buildings (matches game logic)
+            _rand.seed(seg.id)
+
+            # Compute footprint area to determine building height
+            # (simplified version of game's area calculation)
+            gl_verts = [d3d_to_gl(*v) for v in verts]
+            min_x = min(v[0] for v in gl_verts)
+            max_x = max(v[0] for v in gl_verts)
+            min_z = min(v[2] for v in gl_verts)
+            max_z = max(v[2] for v in gl_verts)
+            footprint_size = math.sqrt((max_x - min_x) * (max_z - min_z))
+
+            # Height varies by type and footprint size
+            base_y = gl_verts[0][1]  # use first vertex Y as ground level
+            if seg.road_type == 0:
+                # Normal buildings — taller, variable height
+                height = footprint_size * (0.5 + _rand.random() * 1.5)
+                height = max(800, min(height, footprint_size * 4))
+            elif seg.road_type == 1:
+                # Minor structures — shorter
+                height = footprint_size * (0.3 + _rand.random() * 0.5)
+                height = max(400, min(height, 2000))
+            else:
+                # Type 3 — special/large
+                height = footprint_size * (0.8 + _rand.random() * 2.0)
+                height = max(1000, min(height, footprint_size * 5))
+
+            top_y = base_y + height
+
+            # Build walls: for each edge of the footprint, create a vertical quad
+            edge_count = n if seg.is_closed else n - 1
+            for i in range(edge_count):
+                j = (i + 1) % n
+                bx0, by0, bz0 = gl_verts[i]
+                bx1, by1, bz1 = gl_verts[j]
+
+                # Wall quad: 4 corners
+                bl = (bx0, base_y, bz0)    # bottom-left
+                br = (bx1, base_y, bz1)    # bottom-right
+                tl = (bx0, top_y, bz0)     # top-left
+                tr = (bx1, top_y, bz1)     # top-right
+
+                # Compute wall normal (outward facing)
+                wall_n = compute_face_normal(bl, br, tr)
+
+                # Triangle 1: bl, br, tr
+                positions.extend([*bl, *br, *tr])
+                normals.extend([*wall_n, *wall_n, *wall_n])
+                # UV: edge length mapped to U, height to V
+                edge_len = math.sqrt((bx1-bx0)**2 + (bz1-bz0)**2)
+                u_scale = edge_len / 1000.0  # tile every 1000 units
+                uvs.extend([0, 0, u_scale, 0, u_scale, 1])
+
+                # Triangle 2: bl, tr, tl
+                positions.extend([*bl, *tr, *tl])
+                normals.extend([*wall_n, *wall_n, *wall_n])
+                uvs.extend([0, 0, u_scale, 1, 0, 1])
+
+            # Build roof (flat polygon) — triangulate by fan from first vertex
+            if seg.is_closed and n >= 3:
+                roof_n = (0.0, 1.0, 0.0)
+                v0 = (gl_verts[0][0], top_y, gl_verts[0][2])
+                for i in range(1, n - 1):
+                    v1 = (gl_verts[i][0], top_y, gl_verts[i][2])
+                    v2 = (gl_verts[i+1][0], top_y, gl_verts[i+1][2])
+                    positions.extend([*v0, *v1, *v2])
+                    normals.extend([*roof_n, *roof_n, *roof_n])
+                    uvs.extend([0, 0, 1, 0, 1, 1])
+
+        if not positions:
+            return
+
+        mesh = GPUMesh()
+        mesh.vertex_count = len(positions) // 3
+        mesh.mat_groups = [(0, 0, mesh.vertex_count)]
+        mesh._upload(positions, normals, uvs)
+        self.building_mesh = mesh
+        print(f"  Extruded buildings: {mesh.vertex_count} vertices from {len(c.segments)} shapes")
+
+    def _build_road_surfaces(self):
+        """Build road surfaces between connected junctions as flat strips."""
+        c = self.city
+        positions = []
+        normals = []
+        uvs = []
+        up = (0.0, 1.0, 0.0)
+        road_half_width = 400.0  # game units
+
+        for conn in c.connections:
+            ia, ib = conn.junction_idx_a, conn.junction_idx_b
+            if ia >= len(c.junctions) or ib >= len(c.junctions):
+                continue
+
+            pa = c.junctions[ia].position
+            pb = c.junctions[ib].position
+            ax, ay, az = d3d_to_gl(*pa)
+            bx, by, bz = d3d_to_gl(*pb)
+
+            # Direction vector
+            dx = bx - ax
+            dz = bz - az
+            ln = math.sqrt(dx * dx + dz * dz)
+            if ln < 1e-6:
+                continue
+            dx /= ln
+            dz /= ln
+
+            # Perpendicular (in XZ plane)
+            px, pz = -dz, dx
+            hw = road_half_width
+
+            # Four corners of the road strip
+            l0 = (ax + px * hw, ay + 5, az + pz * hw)
+            r0 = (ax - px * hw, ay + 5, az - pz * hw)
+            l1 = (bx + px * hw, by + 5, bz + pz * hw)
+            r1 = (bx - px * hw, by + 5, bz - pz * hw)
+
+            u_len = ln / 2000.0  # tile texture every 2000 units
+
+            # Triangle 1: l0, r0, r1
+            positions.extend([*l0, *r0, *r1])
+            normals.extend([*up, *up, *up])
+            uvs.extend([0, 0, 1, 0, 1, u_len])
+
+            # Triangle 2: l0, r1, l1
+            positions.extend([*l0, *r1, *l1])
+            normals.extend([*up, *up, *up])
+            uvs.extend([0, 0, 1, u_len, 0, u_len])
+
+        if not positions:
+            return
+
+        mesh = GPUMesh()
+        mesh.vertex_count = len(positions) // 3
+        mesh.mat_groups = [(0, 0, mesh.vertex_count)]
+        mesh._upload(positions, normals, uvs)
+        self.road_mesh = mesh
+        print(f"  Road surfaces: {mesh.vertex_count} vertices from {len(c.connections)} connections")
 
     def _build_junction_markers(self):
         """Build point markers for junctions."""
@@ -459,7 +621,8 @@ class CityEditor:
             f"[T] Terrain {'ON' if self.show_terrain else 'off'}  "
             f"[1] Buildings {'ON' if self.show_buildings else 'off'}  "
             f"[2] Models {'ON' if self.show_models else 'off'}  "
-            f"[3] Connections {'ON' if self.show_connections else 'off'}  "
+            f"[3] Roads {'ON' if self.show_roads else 'off'}  "
+            f"[4] Connections {'ON' if self.show_connections else 'off'}  "
             f"[J] Junctions {'ON' if self.show_junctions else 'off'}",
             f"[W] Wireframe {'ON' if self.show_wireframe else 'off'}  "
             f"[G] Grid {'ON' if self.show_grid else 'off'}  "
@@ -497,7 +660,23 @@ class CityEditor:
             self.terrain_mesh.draw(self.mesh_program, self.u_has_tex)
             gl.glEnable(gl.GL_CULL_FACE)
 
-        # Building models — cull front faces because X-negation flips winding
+        # Road surfaces between junctions
+        if self.show_roads and self.road_mesh:
+            gl.glDisable(gl.GL_CULL_FACE)
+            set_mat4(self.u_model, identity)
+            gl.glUniform4f(self.u_base_color, 0.45, 0.43, 0.40, 1.0)
+            self.road_mesh.draw(self.mesh_program, self.u_has_tex)
+            gl.glEnable(gl.GL_CULL_FACE)
+
+        # Extruded buildings (procedural shapes from .city segments)
+        if self.show_buildings and self.building_mesh:
+            gl.glDisable(gl.GL_CULL_FACE)
+            set_mat4(self.u_model, identity)
+            gl.glUniform4f(self.u_base_color, 0.55, 0.50, 0.45, 1.0)
+            self.building_mesh.draw(self.mesh_program, self.u_has_tex)
+            gl.glEnable(gl.GL_CULL_FACE)
+
+        # PM model placements — cull front faces because X-negation flips winding
         if self.show_models:
             gl.glCullFace(gl.GL_FRONT)
             for gpu_mesh, col_major in self.model_instances:
@@ -602,6 +781,8 @@ class CityEditor:
         elif symbol == key._2:
             self.show_models = not self.show_models
         elif symbol == key._3:
+            self.show_roads = not self.show_roads
+        elif symbol == key._4:
             self.show_connections = not self.show_connections
         elif symbol == key.T:
             self.show_terrain = not self.show_terrain
