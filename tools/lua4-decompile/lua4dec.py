@@ -1746,6 +1746,23 @@ class Decompiler:
                 if self.debug:
                     emit(f'-- unknown opcode {op} at pc={pc}')
 
+            # Bug 1: declare a non-param local whose initializer was pushed at an
+            # EARLIER pc than its scope-open (startpc), so push_val never claimed
+            # it (e.g. a local first read by the condition that opens its scope).
+            # Runs AFTER the handler: any local a handler already owns at this pc
+            # has local_init=True and is skipped. Fires only when the value is
+            # still parked unclaimed at the local's stack slot.
+            for j in range(len(chunk.locals)):
+                loc = chunk.locals[j]
+                if loc.startpc == vb_pc and loc.startpc > 0 and not local_init[j]:
+                    s = local_slots.get(j, j)
+                    if 0 <= s < top:
+                        local_init[j] = True
+                        nm = loc.name
+                        emit(f'local {nm}={stack[s].text}')
+                        stack[s] = SVal(nm, VKind.NAME, local_name=nm,
+                                        is_local=True)
+
             pc += 1
 
         # Emit any remaining end statements
