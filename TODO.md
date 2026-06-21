@@ -58,11 +58,19 @@ Tools: `roundtrip_check.py` (harness, flags `DROP_LOCAL`), `find_dropped_locals.
       so the long story scrolls AND brief mission-complete (StartIntro/ShowIntro) auto-advances.
 - [x] **White rectangle in minimap** — FIXED: ShowAimLock used the static `marker\checkpoint` (only animated
       checkpoint0/1/2 exist) → white box; now uses `Animate("marker\\checkpoint",3)`.
-- [ ] **Chinatown escort — no enemy attacker spawns** (calm ride). Mission 9 in `sanjose.lua MissionUpdate` (~L900):
-      the pikap attacker + parented "shooter" teen are created `enable 0` at setup (~L351-371) and driven by
-      `gangpikap_Update`, but the **enable/attack trigger is missing** (`local pikap=FindObject("pikap")` fetched at
-      L906 but unused in the mission-9 block). Likely a dropped/mis-decompiled code block — needs bytecode
-      reconstruction of mission 9 vs original.
+- [x] **Mission-FAILED gui not appearing** — FIXED: `gamegui.lua` `message()`/`message2()` had a merged-else bug
+      (`if not time then msg_alpha=v; msg_alpha=time; end`) → any no-`time` message set msg_alpha=nil → invisible.
+      Restored the `else`. Affected EVERY no-time message. Promoted; gamegui added to deploy.sh (was loaded loose but
+      never deployed by the script — an earlier session had copied a buggy one in).
+- [ ] **Chinatown escort — no enemy attacker spawns** (calm ride). CORRECTED: mission-9 MissionUpdate block is
+      **faithful** (NOT a dropped block — original also fetches `pikap` unused). The gang is activated in
+      **`game.lua chinamafiose_Update` ~L1662** when the chinamafiose boards the player car
+      (`Cmd(FindObject("pikap"/"shooter"/"gangpikap"),"enable 1")`). SetDriver(board)+enable are in the SAME block, so
+      if the ride happens the enable already ran → gang enabled but `gangpikap_Update` (sanjose ~L951) produces no
+      chase = a RUNTIME issue. **Diagnostics deployed** (prints at the enable site + gangpikap_Update activation; wip
+      game.lua+sanjose.lua, NOT promoted). NEXT: run chinatown, check `stderr.txt` for `CHINATOWN gang enabled:`
+      (pikap/shooter/gangpikap >0?) and `CHINATOWN gangpikap ACTIVATED` (chase start?) → pinpoints break, then fix +
+      remove prints.
 - [ ] **No arrow on moving VEHICLE targets** (pedestrian arrows work). `game.lua:889` `AddMarker("marker\\cars",…)`
       gated by `if (car>0)` in a race/mission-mode block — check the mode condition isn't another mis-decompile.
 - [ ] **No game-over / fade on player death.** `sanjose.lua` `MissionUpdate` `mission_curid=-2` path (~L488-494).
