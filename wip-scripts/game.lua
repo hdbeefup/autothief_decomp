@@ -814,6 +814,11 @@ function rgirl_Update(this)
 
 	if (racemode==1) then
 		local counter=GetNumber(this, "counter");
+		-- decompiler dropped this `local` (rgirl_Update dropped-local bug) so
+		-- prevcounter became a nil global -> floor(prevcounter) failed -> the
+		-- 3/2/1/GO!! countdown never showed. prevcounter holds the pre-increment
+		-- value so the integer-crossing check below can fire once per second.
+		local prevcounter=counter;
 		counter=(counter + (DT / 2));
 		if (counter<0) then
 			local angle=(((-counter / 3) * 100) + 130);
