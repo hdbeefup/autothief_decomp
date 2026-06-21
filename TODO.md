@@ -11,14 +11,14 @@ Actionable tasks. For phased context see `ROADMAP.md`; for format/animation open
 ## Now / next
 - [ ] **In-game smoke test** refreshed/promoted scripts (copy `ScriptsStable\*.lua` into the game's `Scripts\`):
       sanjose mission 0 start + transitions; skeleton get-hit ragdoll (~L879), pickup/death loop, taxi; game/mimics OK.
-- [ ] **Review + refresh `menu.lua` / `rush.lua`** — the OR-fix changes them at *equal* bytecode fidelity, and rush's
-      `driver/badguy/copnear` region is a diamond that isn't cleanly an OR. Verify vs bytecode before refreshing.
-- [ ] **Fix `intro.lua` negation bug** — positive boolean test jumping into the body (`JMPT N ; to X`) reconstructed
-      as `not(val)` → recompiles to `NOT; JMPF` (+1 instr, shifts targets). Lives in the shared
-      `JMPT/JMPF/JMPONT/JMPONF` handler (`lua4dec.py:~1491`); needs OR-success-vs-closing discrimination + regression
-      guard (rush/skeleton boolean checks share it). intro is "usable", so lower priority.
-- [ ] **Consolidate decompiler copies** — make `tools/lua4-decompile/lua4dec.py` the single source of truth; reduce
-      `..\lua4-decompiler\` to a tagged historical mirror (keep `272713c` for intro history).
+- [x] **Reviewed `menu.lua` / `rush.lua`** — equal bytecode fidelity, neither bytecode-exact; rush's
+      `driver/badguy/copnear` diamond is a decompiler limitation. Kept committed versions (DECOMPILER_SOURCES.md).
+- [~] **Fix `intro.lua` negation bug** — DEFERRED. Positive boolean test jumping into the body (`JMPT`) reconstructed
+      as `not(val)` → `NOT; JMPF` (+1 instr). Lives in the shared `JMPT/JMPF/JMPONT/JMPONF` handler. Tried mirroring
+      the comparison handler's convention — regressed game/menu/skeleton; reverted. Needs target-based
+      OR-success-vs-closing detection for booleans, regression-guarded. intro is usable + near-semantically-correct.
+- [x] **Consolidated decompiler copies** — `tools/lua4-decompile/lua4dec.py` is canonical; `..\lua4-decompiler\`
+      synced as a mirror, tagged `intro-baseline` (272713c).
 
 ## Phase 2 — gameplay (Lua/config first; see ROADMAP for detail)
 - [ ] Collision: tune `ERP`/`CFM`/`G_ITERATIONS` in `globals.lua` (kills "magnetic trees" + ODE LCP spam).
