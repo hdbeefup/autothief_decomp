@@ -1865,11 +1865,16 @@ def main():
         sys.exit(1)
 
     if args.output:
-        with open(args.output, 'w', encoding='utf-8') as f:
+        # latin-1 (1 byte == 1 codepoint) so the string bytes read as latin-1 in
+        # _read_string round-trip verbatim. Writing utf-8 would double-encode any
+        # high byte (e.g. CP1251 Cyrillic 0xC2 -> 0xC3 0x82), corrupting the
+        # language files. ASCII output is byte-identical either way.
+        with open(args.output, 'w', encoding='latin-1') as f:
             f.write(source)
         print(f'Decompiled to {args.output}')
     else:
-        print(source)
+        # Same byte-faithfulness for piped output (e.g. `lua4dec.py x.luab | luac4 -p`).
+        sys.stdout.buffer.write(source.encode('latin-1') + b'\n')
 
 if __name__ == '__main__':
     main()
