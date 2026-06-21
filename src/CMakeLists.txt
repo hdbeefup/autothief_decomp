@@ -7,6 +7,11 @@ if(MSVC)
     add_compile_options(/W3 /wd4996 /wd4244 /wd4018 /wd4146)
     # Match original binary: 32-bit x86
     # Build with: cmake -A Win32 ..
+    # Emit a PDB (even in Release) so reccmp can compare recompiled functions
+    # to the original. /OPT:NOREF|NOICF keeps every function (no folding/strip)
+    # so annotated functions are individually findable.
+    add_compile_options(/Zi)
+    add_link_options(/DEBUG /OPT:NOREF /OPT:NOICF)
 endif()
 
 # Build type

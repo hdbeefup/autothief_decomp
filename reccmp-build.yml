@@ -1,0 +1,5 @@
+project: reccmp-project.yml
+targets:
+  AUTOTHIEF:
+    path: build-reccmp/Release/pak_test.exe
+    pdb: build-reccmp/Release/pak_test.pdb

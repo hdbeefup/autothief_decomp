@@ -41,6 +41,7 @@ static int       g_pakFileCount = 0;
 
 /* --- Cipher --- */
 
+// FUNCTION: AUTOTHIEF 0x0040ef80
 void Cipher_ROR1(unsigned char *buf, int len)
 {
     int i;
@@ -183,6 +184,7 @@ void PakArchive_Init(void)
     LOG_INFO("PAK", "Loaded %d entries from %d pak file(s)", g_pakEntryCount, g_pakFileCount);
 }
 
+// FUNCTION: AUTOTHIEF 0x00410060
 int PakArchive_LoadFile(const char *filename, void **out_data, int *out_size)
 {
     char normalized[260];
@@ -224,6 +226,7 @@ int PakArchive_LoadFile(const char *filename, void **out_data, int *out_size)
     return 1;
 }
 
+// FUNCTION: AUTOTHIEF 0x004103c0
 int FileIO_LoadWithFallback(const char *filename, void **out_data, int *out_size)
 {
     FILE *fp;
@@ -264,6 +267,7 @@ int FileIO_LoadWithFallback(const char *filename, void **out_data, int *out_size
 
 /* --- FileHandle API --- */
 
+// FUNCTION: AUTOTHIEF 0x00410660
 FileHandle *FileIO_Open(const char *filename, const char *mode)
 {
     FileHandle *fh;
@@ -301,6 +305,7 @@ FileHandle *FileIO_Open(const char *filename, const char *mode)
     return NULL;
 }
 
+// FUNCTION: AUTOTHIEF 0x0040f000
 int FileIO_Read(void *dest, int elem_size, int count, FileHandle *fh)
 {
     int total, available, readable;

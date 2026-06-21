@@ -1,0 +1,6 @@
+targets:
+  AUTOTHIEF:
+    filename: AutoThief.exe
+    source-root: src
+    hash:
+      sha256: f0fabc47c1b68d1df875886268ff738db4c9acf38c8870f92d4aadd7f3251748
