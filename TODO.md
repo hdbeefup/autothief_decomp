@@ -81,7 +81,7 @@ Tools: `roundtrip_check.py` (harness, flags `DROP_LOCAL`), `find_dropped_locals.
       game.lua+sanjose.lua, NOT promoted). NEXT: run chinatown, check `stderr.txt` for `CHINATOWN gang enabled:`
       (pikap/shooter/gangpikap >0?) and `CHINATOWN gangpikap ACTIVATED` (chase start?) → pinpoints break, then fix +
       remove prints.
-- [~] **Race-the-girl: no countdown / no opponent indicator / no destination** — FIXED (pending re-test): one root
+- [x] **Race-the-girl: no countdown / no opponent indicator / no destination** — FIXED + user-verified: one root
       cause. `game.lua rgirl_Update` dropped `local prevcounter` → `floor(prevcounter)` (nil) threw every frame and
       aborted the whole race update, killing the countdown AND everything after it (markers, opponent arrow, FINISH).
       Restored the local (game.lua now 0 dropped locals); promoted. Likely the same crash behind the earlier "no
