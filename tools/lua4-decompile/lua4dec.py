@@ -549,6 +549,59 @@ class Decompiler:
                                 break
                         break
 
+        # Bug 3: OR-led compound `if (a OP x) or (<AND-group>) then BODY`.
+        # The leading comparison is a TRUE-exit whose jump targets BODY directly
+        # (operator KEPT); the trailing AND members are FALSE-exits to a shared
+        # END past the body (operators inverted). _find_next_condition / the
+        # expansion loop can't bridge a BODY-target to an END-target, so the OR
+        # member is misclassified as AND and the OR is dropped. Scan the whole
+        # condition region [pcA, BODY) directly and classify each member by its
+        # jump target: target==BODY -> OR (keep op), target==END -> AND (invert).
+        if Op.JMPNE <= get_op(ins[first_pc]) <= Op.JMPGE:
+            a_pc = first_pc
+            a_target = a_pc + 1 + get_s(ins[a_pc])       # prospective BODY start
+
+            def _is_stmt(i):
+                o = get_op(ins[i])
+                return (o == Op.RETURN or Op.SETLOCAL <= o <= Op.SETMAP
+                        or (o == Op.CALL and get_b(ins[i]) == 0))
+
+            # a_target must be a forward, local BODY start (a TRUE-exit target).
+            if a_pc + 1 < a_target <= min(N, a_pc + 80):
+                members = []
+                ok = True
+                for q in range(a_pc, a_target):
+                    o = get_op(ins[q])
+                    if q != a_pc and _is_stmt(q):
+                        ok = False           # a statement => a_target is not a
+                        break                # pure condition's BODY (simple if)
+                    if o == Op.JMP:
+                        ok = False           # nested control flow in the region
+                        break
+                    if Op.JMPNE <= o <= Op.JMPGE:
+                        if q + 1 < N and get_op(ins[q + 1]) == Op.PUSHNILJMP:
+                            ok = False       # `x = (a<b)` value, not a branch
+                            break
+                        members.append(q)
+                    elif Op.JMPT <= o <= Op.JMPONF:
+                        ok = False           # boolean-test member: the render
+                        break                # path is comparison-only; bail
+                if ok and len(members) >= 2:
+                    tgts = [m + 1 + get_s(ins[m]) for m in members]
+                    end_tgts = set(t for t in tgts if t != a_target)
+                    or_count = sum(1 for t in tgts if t == a_target)
+                    and_count = len(members) - or_count
+                    # Exactly one shared END past BODY, an AND group of >=2
+                    # members, and at least the leading OR member -> the
+                    # `(a) or (b and c ...)` shape. (>=2 AND members excludes
+                    # `a or b` / `a or b or c`, which the normal path handles;
+                    # an empty end_tgts is `(A and B) or (C and D)`, also handled
+                    # by the existing expansion loop -> leave it alone.)
+                    if (len(end_tgts) == 1 and next(iter(end_tgts)) > a_target and
+                            and_count >= 2 and or_count >= 1):
+                        return [(m, (m + 1 + get_s(ins[m])) == a_target)
+                                for m in members]
+
         if len(chain) <= len(seq_chain):
             return None  # no expansion found
 
