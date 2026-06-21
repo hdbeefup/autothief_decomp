@@ -912,6 +912,9 @@ class Decompiler:
         cond_str = ''
         compound_info = None  # list of (pc, is_or) from _find_compound_chain
 
+        # Bug 4: carries `return f(args)` from a TAILCALL to its trailing RETURN
+        tailcall_expr = None
+
         # Do-end blocks
         do_pcs, end_pcs_do = self._find_do_end_blocks(chunk)
 
@@ -1052,11 +1055,15 @@ class Decompiler:
                     next_op = get_op(ins_list[pc + 1])
                     is_last = next_op in (Op.JMP, Op.END)
 
-                parts = []
-                for j in range(ret_base_0, top):
-                    parts.append(stack[j].text)
-
-                ret_str = 'return ' + ', '.join(parts) if parts else 'return'
+                if tailcall_expr is not None:
+                    # Bug 4: this RETURN belongs to a preceding TAILCALL.
+                    ret_str = f'return {tailcall_expr}'
+                    tailcall_expr = None
+                else:
+                    parts = []
+                    for j in range(ret_base_0, top):
+                        parts.append(stack[j].text)
+                    ret_str = 'return ' + ', '.join(parts) if parts else 'return'
                 if not is_last:
                     ret_str = 'do ' + ret_str + ' end'
 
@@ -1087,7 +1094,18 @@ class Decompiler:
                 # Pop everything from func_pos upward
                 top = func_pos
 
-                if loc_start_idx >= 0 and num_locals_here > 0:
+                if op == Op.TAILCALL:
+                    # `return f(args)`: the compiler emits TAILCALL then OP_RETURN.
+                    # Stash the call so the trailing RETURN prints it (the RETURN
+                    # handler owns the is_last / do..end wrapping). A tailcall
+                    # never assigns a local, so this case must come first.
+                    if pc + 1 < N and get_op(ins_list[pc + 1]) == Op.RETURN:
+                        tailcall_expr = call_expr
+                    else:
+                        # Defensive: no trailing RETURN (not expected in Lua 4.0)
+                        emit(f'return {call_expr}')
+                        emit_blank()
+                elif loc_start_idx >= 0 and num_locals_here > 0:
                     # Local assignment: local a, b = func(args)
                     names = []
                     for j in range(num_ret if num_ret > 0 else num_locals_here):
