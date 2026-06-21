@@ -32,13 +32,23 @@ Tools: `roundtrip_check.py` (harness, flags `DROP_LOCAL`), `find_dropped_locals.
 - [ ] **Passenger enters car but door doesn't close.** `skeleton.lua:1072` `Cmd(car,"close rightdoor")` exists but is
       gated by the seating condition at L1046 (`frame>10 and prevframe<=10 and taxiwaiter==2 and anim=="idle1"`) — if
       that animation-state check is mis-decompiled or never matches, the close never fires. Investigate.
+- [x] **Shooting + melee (punch/kick)** — FIXED by the reversed-temp fix (BulletShot/HitTool/HitHandLeg aim was
+      scrambled). User-confirmed working.
+- [x] **Luxury car (mission 5) AI driving into walls** — FIXED (reversed-temp). User-confirmed.
+- [x] **Taxi destination** — FIXED (reversed-temp; on-road now). The long taxi distances are original behavior
+      (`range=random(50000,150000)`); tune if wanted.
+- [x] **intro auto-advance + mission-complete text** — FIXED: moved `skip=1` to the OUTER else (text-fully-scrolled),
+      so the long story scrolls AND brief mission-complete (StartIntro/ShowIntro) auto-advances.
+- [x] **White rectangle in minimap** — FIXED: ShowAimLock used the static `marker\checkpoint` (only animated
+      checkpoint0/1/2 exist) → white box; now uses `Animate("marker\\checkpoint",3)`.
+- [ ] **Chinatown escort — no enemy attacker spawns** (calm ride). Mission 9 in `sanjose.lua MissionUpdate` (~L900):
+      the pikap attacker + parented "shooter" teen are created `enable 0` at setup (~L351-371) and driven by
+      `gangpikap_Update`, but the **enable/attack trigger is missing** (`local pikap=FindObject("pikap")` fetched at
+      L906 but unused in the mission-9 block). Likely a dropped/mis-decompiled code block — needs bytecode
+      reconstruction of mission 9 vs original.
 - [ ] **No arrow on moving VEHICLE targets** (pedestrian arrows work). `game.lua:889` `AddMarker("marker\\cars",…)`
       gated by `if (car>0)` in a race/mission-mode block — check the mode condition isn't another mis-decompile.
 - [ ] **No game-over / fade on player death.** `sanjose.lua` `MissionUpdate` `mission_curid=-2` path (~L488-494).
-- [ ] **Melee (punch/kick) doesn't work** even right next to an NPC. Find the melee logic (rush.lua/skeleton.lua).
-- [ ] **Shooting reliability** — v1 lock-on reticle helps (you can see the target), but hits still unreliable; the
-      original was jank too (locks random targets). v2: tune `GetAutoAimTarget` (remove `random(0,150)` jitter,
-      cone), maybe show which target is locked more clearly + a free-aim crosshair.
 
 ## Original-game bugs — wishlist bugfix mods (the "labor of love")
 - [ ] **#17 Jack NPC/ghost-driven car → player stuck** (player can't move at all, NPC jumps out). Car-control
