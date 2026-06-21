@@ -41,7 +41,9 @@ Actionable tasks. For phased context see `ROADMAP.md`; for format/animation open
 - [ ] Road-segment vertex editing (follow-up; `city_edit.py` currently covers model placements only).
 
 ## Phase 4 — native engine (background)
-- [ ] Set up `reccmp` for AutoThief.exe (recompiled PDB + address annotations).
+- [x] **reccmp** wired up + working (`docs/RECCMP.md`): `reccmp-reccmp --target AUTOTHIEF` runs against the original;
+      5 `pak_io` funcs annotated, ~11% baseline (functional reimpl). Build Win32 with PDB. Now: reimplement more
+      functions from `docs/SYMBOLS.md` toward matching %.
 - [~] **Audio fade-to-silence** bug — investigated (`docs/AUDIO_FADE_BUG.md`): NOT a naive leak; likely the OpenAL
       manager update `sub_4F7560` ceasing to tick (stops GC + stream pump). NEXT (user, no code change): run
       `alCmd("Stat")`/`alCmd("Clean")` in-game to confirm; if `Clean` restores audio, try a periodic-`Clean` Lua
