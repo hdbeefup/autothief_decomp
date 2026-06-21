@@ -13,6 +13,11 @@ Actionable tasks. For phased context see `ROADMAP.md`; for format/animation open
       sanjose mission 0 start + transitions; skeleton get-hit ragdoll (~L879), pickup/death loop, taxi; game/mimics OK.
 - [x] **Reviewed `menu.lua` / `rush.lua`** — equal bytecode fidelity, neither bytecode-exact; rush's
       `driver/badguy/copnear` diamond is a decompiler limitation. Kept committed versions (DECOMPILER_SOURCES.md).
+- [~] **Dropped-local decompiler bug** — vars become globals (the sanjose failure). Tooling done: harness reports
+      `DROP_LOCAL`; `tools/lua4-decompile/find_dropped_locals.py <luab>` names the missing `local` + function. Manual
+      workflow: harness flags → find_dropped_locals names it → add `local X` → re-check. `wip-scripts/sanjose.lua` is
+      hand-patched (`progress`), pending in-game test. STILL TODO: proper fix in lua4dec.py (use the bytecode local
+      debug info to never drop a `local`) + optional auto-insert — deferred until after the exe decomp matures.
 - [~] **Fix `intro.lua` negation bug** — DEFERRED. Positive boolean test jumping into the body (`JMPT`) reconstructed
       as `not(val)` → `NOT; JMPF` (+1 instr). Lives in the shared `JMPT/JMPF/JMPONT/JMPONF` handler. Tried mirroring
       the comparison handler's convention — regressed game/menu/skeleton; reverted. Needs target-based
