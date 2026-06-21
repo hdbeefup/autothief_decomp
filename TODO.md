@@ -131,9 +131,8 @@ globals, mimics, sanjose, skeleton.
 
 ## Lua recovery — remaining
 - [x] Re-decompile + promote game/gamegui/globals/mimics/sanjose/skeleton CLEAN (no hand-patches) from lua4dec.py
-      94a02c7 (the 4 source fixes retired every hand-patch). Deployed via deploy.sh (mimics added). **Awaiting in-game
-      smoke test** of the behavior changes — see DECOMPILER_SOURCES.md "2026-06-21 decompiler-SOURCE fixes".
-- [ ] In-game verify the re-promoted scripts, then drop the "pending smoke test" note in DECOMPILER_SOURCES.md.
+      94a02c7 (the 4 source fixes retired every hand-patch). Deployed via deploy.sh (mimics added). **IN-GAME VERIFIED
+      2026-06-21** (user: "everything looks good") — see DECOMPILER_SOURCES.md "2026-06-21 decompiler-SOURCE fixes".
 - [ ] intro.lua: still on 272713c (JMPT-into-body negation); re-promote only if the current decompiler's intro runs.
 - [ ] (optional) language files german/polish/russian → ScriptsStable (clean, string tables).
 
