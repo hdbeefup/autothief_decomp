@@ -1007,25 +1007,29 @@ function gangpikap_Update(this)
 
 	end
 
-	if (dist2<=(15000 * 15000)) and (timeout>5) then
-		if (dist2>(5000 * 5000)) then
-			timeout=0;
-			local roadnetwork=FindObjectByClsID(CLS_ROADNETWORK);
-			local tx, ty, tz=TransDir(car, 0, 0, -1);
-			local length=10000;
-			tx=((tx * length) + px);
-			ty=0;
-			tz=((tz * length) + pz);
-			tx, ty, tz=GetPointOnNetwork(roadnetwork, tx, ty, tz);
-			local length=VectorLength((tx - px), 0, (tz - pz));
-			if (length<14000) then
-				local angle=-Vector2Angle((px - x), 0, (pz - z));
-				Cmd(selfcar, format("spawn %d %d %d %f", tx, (ty + 150), tz, angle));
-				Cmd(this, "reset");
-				Cmd(selfcar, "restore");
-				Cmd(selfcar, "Lights 0");
-			end
-
+	-- ORIGINAL bytecode: respawn if (dist2 > 15000^2) OR ((timeout>5) and (dist2 > 5000^2)).
+	-- The decompiler mis-read this compound-OR-with-comparison as the INVERTED
+	-- `dist2 <= 15000^2 and timeout>5 and dist2>5000^2`, so the attacker only respawned when
+	-- CLOSE -> it sat at the cemetery forever and never chased. Restored the original OR: the
+	-- gang now teleports onto the road behind you when you're far/escaped (incl. the moment the
+	-- chinaman boards, when you're far from the cemetery) OR when it gets stuck.
+	if (dist2>(15000 * 15000)) or ((timeout>5) and (dist2>(5000 * 5000))) then
+		timeout=0;
+		local roadnetwork=FindObjectByClsID(CLS_ROADNETWORK);
+		local tx, ty, tz=TransDir(car, 0, 0, -1);
+		local length=10000;
+		tx=((tx * length) + px);
+		ty=0;
+		tz=((tz * length) + pz);
+		tx, ty, tz=GetPointOnNetwork(roadnetwork, tx, ty, tz);
+		local length=VectorLength((tx - px), 0, (tz - pz));
+		if (length<14000) then
+			local angle=-Vector2Angle((px - x), 0, (pz - z));
+			Cmd(selfcar, format("spawn %d %d %d %f", tx, (ty + 150), tz, angle));
+			Cmd(this, "reset");
+			Cmd(selfcar, "restore");
+			Cmd(selfcar, "Lights 0");
+			print("CHINATOWN respawn: pikap -> road behind player");
 		end
 
 	end
