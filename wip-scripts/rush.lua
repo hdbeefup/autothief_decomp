@@ -261,7 +261,7 @@ function ShowAimLock(weapon)
 	local obj=GetAutoAimTarget(parent, px1, py1, pz1, GetNumber(weapon, "autoaimangle"));
 	if (obj~=0) then
 		local tx, ty, tz=GetPosition(obj);
-		AddMarker("marker\\checkpoint", tx, (ty + 100), tz, 48, 48, -24, -24);
+		AddMarker(Animate("marker\\checkpoint", 3), tx, (ty + 100), tz, 48, 48, -24, -24);
 	end
 
 end
