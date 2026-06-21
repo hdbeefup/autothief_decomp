@@ -23,13 +23,22 @@ Tools: `roundtrip_check.py` (harness, flags `DROP_LOCAL`), `find_dropped_locals.
 - **sanjose.lua** — `local progress` fix (PROMOTED + verified; copy here is the same).
 - **skeleton.lua** — `local best_dist=max` fix (PROMOTED + verified; copy here is the same).
 
-## In-game bugs found via dogfooding (open)
+## In-game bugs found via dogfooding
+- [x] **intro** loading-hang + story-scroll — FIXED + promoted (loadingcode AND gate; removed `else skip=1`).
+- [x] **All Animate markers gone** — FIXED (game.lua `Animate` dropped `return`).
+- [x] **Taxi destination marker invisible** — FIXED: `skeleton.lua:1062` `GetPointOnNetwork(…, dx, dy, dz)` used an
+      undeclared global `dy`; original passes local `y`. Changed `dy`→`y`. (Was the same root cause as the AI-driving
+      report — road-network projection got garbage.) Re-test.
+- [ ] **Passenger enters car but door doesn't close.** `skeleton.lua:1072` `Cmd(car,"close rightdoor")` exists but is
+      gated by the seating condition at L1046 (`frame>10 and prevframe<=10 and taxiwaiter==2 and anim=="idle1"`) — if
+      that animation-state check is mis-decompiled or never matches, the close never fires. Investigate.
 - [ ] **No arrow on moving VEHICLE targets** (pedestrian arrows work). `game.lua:889` `AddMarker("marker\\cars",…)`
-      is gated by `if (car>0)` in a race/mission-mode block — check that mode condition isn't another mis-decompile.
-- [ ] **No game-over / fade on player death.** In `sanjose.lua` `MissionUpdate` — the `mission_curid=-2` (failed) →
-      fade/restart path (lines ~488-494). Investigate for a decompiler structure bug.
-- [ ] **AI car drives into walls** (e.g. toolsaler/concept8). Likely `skeleton.lua` `character_Update` road-navigation
-      (`GetPointOnNetwork(roadnetwork, dx, dy, dz)` — the decompiled `dy` maps to original local `y`; verify).
+      gated by `if (car>0)` in a race/mission-mode block — check the mode condition isn't another mis-decompile.
+- [ ] **No game-over / fade on player death.** `sanjose.lua` `MissionUpdate` `mission_curid=-2` path (~L488-494).
+- [ ] **Melee (punch/kick) doesn't work** even right next to an NPC. Find the melee logic (rush.lua/skeleton.lua).
+- [ ] **Shooting reliability** — v1 lock-on reticle helps (you can see the target), but hits still unreliable; the
+      original was jank too (locks random targets). v2: tune `GetAutoAimTarget` (remove `random(0,150)` jitter,
+      cone), maybe show which target is locked more clearly + a free-aim crosshair.
 
 ## Original-game bugs — wishlist bugfix mods (the "labor of love")
 - [ ] **#17 Jack NPC/ghost-driven car → player stuck** (player can't move at all, NPC jumps out). Car-control
