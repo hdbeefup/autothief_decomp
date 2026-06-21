@@ -50,6 +50,15 @@ Tools: `roundtrip_check.py` (harness, flags `DROP_LOCAL`), `find_dropped_locals.
 - [ ] PlaySound3D Z-axis bug (`(sz-sz)` → `(sz-pz)`) in skeleton.lua + rush.lua — see `docs/ORIGINAL_BUGS.md`,
       `mods/bugfixes/`.
 
+## MAJOR FIX (2026-06-21): reversed multi-return assignment
+The decompiler emitted `c, b, a = a, f()` instead of `a, b, c = f()` (SETLOCALs come in reverse target order; the
+handler didn't reverse them and prepended a spurious leading value). This **scrambled X/Y and dropped the 3rd result
+on EVERY multi-return coordinate assignment** (IntersectLine, GetPointOnNetwork, SubVectors, Normalize, …). Fixed in
+lua4dec.py (commit). Harness: zero regressions, big diff drops (rush 226→46, skeleton 613→372, game 685→432, globals
+165→132, sanjose 127→99). Regenerated all gameplay scripts + re-applied patches + deployed. **Likely fixes at once:**
+taxi destination out-of-bounds, AI cars driving into walls, shooting reliability (BulletShot aim was scrambled), melee
+(HitTool/HitHandLeg same math). ← RE-TEST ALL THESE.
+
 ## Decompiler bug PATTERNS (catalog — fix in lua4dec.py eventually; hand-patch for now)
 The user defers deep decompiler perfection until after the exe decomp matures. Patterns seen:
 - **Dropped `return` on TAILCALL** (`return f(...)` → `f(...)`). Only 1 in 16 scripts (game.lua `Animate`). Fix:
