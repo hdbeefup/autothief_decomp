@@ -50,11 +50,11 @@ function ShowLoadProgressBar(tprogress)
 
 	local display=1;
 	local anim=0;
-	local progress=0;
 	while (display~=0) do
 		ScrClip();
 		local w, h=ScrSize();
 		lastProgress=tprogress;
+		local progress=tprogress;
 		if (MaxLoadTemplate>0) then
 			progress=((progress / 2) + ((50 * TemplatesLoaded) / MaxLoadTemplate));
 		end
@@ -953,8 +953,6 @@ function gangpikap_Update(this)
 	if (selfcar==0) then
 		selfcar=FindObject("pikap");
 		if (GetRenderable(selfcar)==0) then
-			-- wait until the pikap is made renderable by the enable in
-			-- game.lua chinamafiose_Update (fires when the chinaman boards).
 			do return end;
 
 		end
@@ -1005,12 +1003,6 @@ function gangpikap_Update(this)
 
 	end
 
-	-- ORIGINAL bytecode: respawn if (dist2 > 15000^2) OR ((timeout>5) and (dist2 > 5000^2)).
-	-- The decompiler mis-read this compound-OR-with-comparison as the INVERTED
-	-- `dist2 <= 15000^2 and timeout>5 and dist2>5000^2`, so the attacker only respawned when
-	-- CLOSE -> it sat at the cemetery forever and never chased. Restored the original OR: the
-	-- gang now teleports onto the road behind you when you're far/escaped (incl. the moment the
-	-- chinaman boards, when you're far from the cemetery) OR when it gets stuck.
 	if (dist2>(15000 * 15000)) or ((timeout>5) and (dist2>(5000 * 5000))) then
 		timeout=0;
 		local roadnetwork=FindObjectByClsID(CLS_ROADNETWORK);

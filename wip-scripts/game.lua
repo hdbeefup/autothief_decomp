@@ -588,14 +588,11 @@ function driver_Update(this)
 					Cmd(this, "anim idle");
 				end
 
-				if (timeout<=50) and (timeout>10) then
-					if (dist2>(200 * 200)) then
-						mode=0;
-						SetNumber(this, "nowarn", 0);
-						timeout=0;
-						Cmd(this, "autoappear 1");
-					end
-
+				if (timeout>50) or ((timeout>10) and (dist2>(200 * 200))) then
+					mode=0;
+					SetNumber(this, "nowarn", 0);
+					timeout=0;
+					Cmd(this, "autoappear 1");
 				end
 
 			end
@@ -790,6 +787,7 @@ end
 
 function Animate(str, frames)
 	return format("marker\\checkpoint%d", floor(mod((GetTime() * 16), frames)));
+
 end
 
 function rgirl_Update(this)
@@ -814,10 +812,6 @@ function rgirl_Update(this)
 
 	if (racemode==1) then
 		local counter=GetNumber(this, "counter");
-		-- decompiler dropped this `local` (rgirl_Update dropped-local bug) so
-		-- prevcounter became a nil global -> floor(prevcounter) failed -> the
-		-- 3/2/1/GO!! countdown never showed. prevcounter holds the pre-increment
-		-- value so the integer-crossing check below can fire once per second.
 		local prevcounter=counter;
 		counter=(counter + (DT / 2));
 		if (counter<0) then

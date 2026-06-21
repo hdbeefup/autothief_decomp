@@ -110,21 +110,31 @@ lua4dec.py (commit). Harness: zero regressions, big diff drops (rush 226→46, s
 taxi destination out-of-bounds, AI cars driving into walls, shooting reliability (BulletShot aim was scrambled), melee
 (HitTool/HitHandLeg same math). ← RE-TEST ALL THESE.
 
-## Decompiler bug PATTERNS (catalog — fix in lua4dec.py eventually; hand-patch for now)
-The user defers deep decompiler perfection until after the exe decomp matures. Patterns seen:
-- **Dropped `return` on TAILCALL** (`return f(...)` → `f(...)`). Only 1 in 16 scripts (game.lua `Animate`). Fix:
-  emit `return ` for `Op.TAILCALL` in the CALL handler (lua4dec.py:~1060).
-- **Dropped `local`** (var becomes a global). Tooling: harness `DROP_LOCAL` + `find_dropped_locals.py`. Seen in
-  sanjose(`progress`), skeleton(`best_dist`), globals(`bestoy/bestoz`); benign ones in game/gamegui/mimics. Proper
-  fix: use the bytecode's local debug info so a `local` is never dropped.
-- **Mis-structured if/else** (e.g. intro `else skip=1` attached to wrong branch; the compound-OR/empty-if bug [FIXED
-  c4e7889]). Hand-patch per case; CFG-level fix is hard.
+## Decompiler bug PATTERNS (catalog) — 4 classes FIXED AT SOURCE 2026-06-21 (`lua4dec.py` 94a02c7)
+All four hand-patched classes are now repaired in the decompiler itself; the scripts decompile clean (harness green:
+DROP_LOCAL 7→0, EMPTY_IF 3 genuine stubs, DIFFS down everywhere). Re-promoted clean (no hand-patches): game, gamegui,
+globals, mimics, sanjose, skeleton.
+- **[FIXED] Dropped `return` on TAILCALL** (`return f(...)` → `f(...)`; game.lua `Animate`). Stash the call and let the
+  trailing RETURN print it (commit e2052a1).
+- **[FIXED] Dropped `local`** (var becomes a global when its scope opens after its initializer push). Lazy-declare at
+  the local's true startpc/slot (commit 58c6ce1). Cleared all 7: game `prevcounter`, gamegui `dispcode`, globals
+  `bestoy/bestoz`, mimics ×6, sanjose `progress`, skeleton `best_dist`/`dy`. Tooling: `find_dropped_locals.py`.
+- **[FIXED] Compound-OR with a leading comparison** (`if (a OP x) or (b and c)` → inverted `if (a<=x) and (b) then if
+  (c)`). `_find_compound_chain` scans the condition region and classifies by jump target (commit 2624e3f). sanjose
+  gangpikap respawn, game spawn-timeout.
+- **[FIXED] Merged-else** (`if C then A else B end` → `if C then A; B; end` when a separate `if` follows on the next
+  line). Target-relationship guard in `_find_else_requirement` (commit 083aa60). gamegui message/message2.
 - **`JMPT`→`not((not X))`** — this is FAITHFUL (recompiles to `NOT;JMPT`), NOT a bug; simplifying to `if X` diverges.
   Leave it. (intro task #6 ≈ resolved this way.)
+- Remaining decompiler limitation (NOT fixed): menu/rush "diamond" mixed comparison/boolean control flow
+  (DECOMPILER_SOURCES.md task #7); intro JMPT-into-body negation (kept on 272713c).
 
 ## Lua recovery — remaining
-- [ ] Promote intro.lua + game.lua to ScriptsStable once in-game verified.
-- [ ] Re-decompile + promote the benign-dropped-local files (game/gamegui/mimics) after hand-patching their locals.
+- [x] Re-decompile + promote game/gamegui/globals/mimics/sanjose/skeleton CLEAN (no hand-patches) from lua4dec.py
+      94a02c7 (the 4 source fixes retired every hand-patch). Deployed via deploy.sh (mimics added). **Awaiting in-game
+      smoke test** of the behavior changes — see DECOMPILER_SOURCES.md "2026-06-21 decompiler-SOURCE fixes".
+- [ ] In-game verify the re-promoted scripts, then drop the "pending smoke test" note in DECOMPILER_SOURCES.md.
+- [ ] intro.lua: still on 272713c (JMPT-into-body negation); re-promote only if the current decompiler's intro runs.
 - [ ] (optional) language files german/polish/russian → ScriptsStable (clean, string tables).
 
 ## Phase 2 — gameplay (mostly Lua/config; see ROADMAP + docs/PHASE2_TUNING.md)

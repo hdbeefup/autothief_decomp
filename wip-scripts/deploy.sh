@@ -5,7 +5,7 @@ set -u
 WIP="$(cd "$(dirname "$0")" && pwd)"
 GS="N:/GamesRE/CarJacker/Scripts"
 LUAC="$WIP/../tools/lua4-decompile/CFLuaDC-Lua4-Decompiler-main/luac4.exe"
-FILES="sanjose skeleton globals rush game gamegui intro"
+FILES="sanjose skeleton globals rush game gamegui intro mimics"
 
 mkdir -p "$GS/_backup_wip"
 for f in $FILES; do

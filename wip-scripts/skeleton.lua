@@ -148,10 +148,10 @@ end
 function CP_findClosestPoint(this, x, y, z, min, max)
 	local id=2;
 	local ret_name=nil;
+	local best_dist=max;
 	local ret_x=0;
 	local ret_y=0;
 	local ret_z=0;
-	local best_dist=max;
 	while (id<=17) do
 		if (id~=9) and (id~=10) and (id~=3) and (id~=4) and (id~=11) and (id~=12) then
 			local tname=format("%d", id);
@@ -1058,8 +1058,8 @@ function character_Update(this)
 					local angle=random(0, 360);
 					local range=random(50000, 150000);
 					local dx=(x + (sin(angle) * range));
-					local dz=(z + (cos(angle) * range));
 					local dy=y;
+					local dz=(z + (cos(angle) * range));
 					local tx, ty, tz=GetPointOnNetwork(roadnetwork, dx, dy, dz);
 					tx, ty, tz=IntersectLine(roadnetwork, tx, (ty + 100000), tz, tx, (ty - 100000), tz);
 					SetVector(this, "target", tx, ty, tz);

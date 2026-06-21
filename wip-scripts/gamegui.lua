@@ -10,6 +10,7 @@ function enter_security_code(code)
 
 	end
 
+	local dispcode=code;
 	for i=strlen(code), 4 do
 		dispcode=dispcode .. "*";
 	end
@@ -340,8 +341,6 @@ function message(line1, line2, line3, line4, time, mintime)
 	if not (time) then
 		msg_alpha=10;
 	else
-		-- same merged-else decompiler bug as message2 (see below): without a
-		-- `time` arg, msg_alpha became nil -> invisible message. Restored else.
 		msg_alpha=time;
 	end
 
@@ -367,11 +366,6 @@ function message2(scale, line1, line2, line3, line4, time, mintime)
 	if not (time) then
 		msg_alpha=4;
 	else
-		-- decompiler merged this else-branch into the if body, so a message2 call
-		-- with no `time` arg ran msg_alpha=4 then immediately msg_alpha=nil -> the
-		-- message rendered with nil alpha (invisible). Broke the "Mission Failed"
-		-- gui (message2(1.5, MISSIONFAILED) passes no time) + every other no-time
-		-- message. Bytecode: JMPT time -> msg_alpha=time, else msg_alpha=4.
 		msg_alpha=time;
 	end
 
