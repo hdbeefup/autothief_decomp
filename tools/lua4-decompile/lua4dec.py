@@ -801,10 +801,21 @@ class Decompiler:
         if get_s(ins[pc]) < 0:
             return False
 
+        # End of THIS if-construct (where the then-body JMP lands).
+        my_target = pc + 1 + get_s(ins[pc])
+
         # Check if there's a conditional jump on the next line
         for i in range(pc + 1, min(N, pc + 10)):
             op = get_op(ins[i])
             if Op.JMPNE <= op <= Op.JMPONF:
+                # A genuine elseif test lies INSIDE the region this then-body
+                # JMP skips over (strictly before my_target). A conditional at
+                # or after my_target belongs to a SEPARATE following statement,
+                # so a real `else` IS needed here -- without this guard a
+                # next-line `if` is mistaken for an elseif and the else body
+                # merges into the then body (gamegui message/message2).
+                if i >= my_target:
+                    break
                 line_i = self._get_line_info(chunk, i)
                 line_pc = self._get_line_info(chunk, pc)
                 if line_i >= 0 and line_pc >= 0 and line_i - 1 == line_pc:
