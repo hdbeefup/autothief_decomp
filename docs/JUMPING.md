@@ -41,12 +41,24 @@ There is **no `jump` verb** and no vertical-impulse verb (present or commented-o
 3. **Landing:** no new query — `MoveBody`/`FUN_0041f800` already sweep the whole scene collider registry, so
    collide-and-slide resolves landing on a car roof once vertical motion exists.
 
-## Open dependency (resolve before implementing)
-The pbeScene per-frame **gravity + `pos += vel*dt` integrator** is reached by an unresolved vtable call from
-`FUN_0041da10` (`pbeScene.cpp`). Confirm: (a) gravity is applied to the character body, and (b) the character's foot
-collider is in the `scene+0x90` list — otherwise step 1 alone won't produce a fall. Also check no OTHER path calls
-`FUN_004e4778` on the character body each frame (a separate "stick to ground" routine would re-pin Y and must be gated
-while airborne). `FUN_00527060` is the only on-foot velocity writer found so far.
+## Dependency RESOLVED — GO (and simpler than first thought)
+Correction: the character `+0xbc` body is a **raw ODE `dxBody`**, not a separate "pbe" body (pbeScene is just the
+renderer/collision wrapper; `FUN_0041da10` only sets D3D matrices, it is NOT the physics step). The real step chain is
+`FUN_004e3fa4` (world step) → `FUN_004edd30` (island stepper / `dInternalStepIsland`) → `FUN_004f0ce8` (integrator,
+`pos += vel*dt`). Confirmed:
+- **Gravity already applies to the character body.** The island stepper does `facc += mass*g` for every body whose
+  no-gravity bit (`flags+0x18 & 0x8`) is clear (globals_05.c:16988), then `vel += impulse*invMass`. The char body is
+  created by `dBodyCreate` (`FUN_004e3e0c`), enabled, gravity-ON by default, and **nothing in the binary ever sets the
+  no-gravity bit**. So ODE produces the rise-and-fall arc for free — the jump code must **NOT** add its own `vy -= g*dt`
+  (that would double-count gravity).
+- **The char foot collider IS in the `scene+0x90` registry** (registered via the scene's pending-add list), so the
+  scene-wide sweep already tests it against terrain + cars → landing on a car works once airborne.
+- **Only ONE per-frame writer of the char body Y-velocity to gate:** the `FUN_004e4778` call at globals_06.c:19656
+  inside `FUN_00527060`. (The ODE solver's own write at globals_05.c:18572 is legitimate — leave it.) No separate
+  stick-to-ground routine exists.
+
+**Net plan:** in `FUN_00527060`, while airborne don't overwrite body Y-vel (preserve `body+0xec`); set `vy = jumpVel`
+once on the jump frame; add a `jump` verb in `FUN_00527c80` (vehicle.c:3882). ODE handles the gravity/fall and landing.
 
 ## Key addresses
 | Purpose | Function | Location |
