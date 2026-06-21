@@ -86,9 +86,10 @@ Tools: `roundtrip_check.py` (harness, flags `DROP_LOCAL`), `find_dropped_locals.
       aborted the whole race update, killing the countdown AND everything after it (markers, opponent arrow, FINISH).
       Restored the local (game.lua now 0 dropped locals); promoted. Likely the same crash behind the earlier "no
       destination marker" reports for race.
-- [ ] **No arrow on moving VEHICLE targets** (pedestrian arrows work). `game.lua:889` `AddMarker("marker\\cars",…)`
-      gated by `if (car>0)` — recheck after the rgirl_Update crash fix (may already be resolved).
-- [ ] **No game-over / fade on player death.** `sanjose.lua` `MissionUpdate` `mission_curid=-2` path (~L488-494).
+- [x] **No arrow on moving VEHICLE targets** — FIXED + user-verified (resolved by the rgirl_Update dropped-local
+      crash fix — the race update was aborting before drawing the vehicle marker).
+- [x] **No game-over / mission-failed on player death** — FIXED + user-verified (the gamegui `message2` merged-else
+      fix made the MISSIONFAILED gui appear; the `mission_curid=-2` fail path now surfaces correctly).
 
 ## Original-game bugs — wishlist bugfix mods (the "labor of love")
 - [ ] **#17 Jack NPC/ghost-driven car → player stuck** (player can't move at all, NPC jumps out). Car-control
