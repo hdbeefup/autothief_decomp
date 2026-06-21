@@ -1215,24 +1215,22 @@ class Decompiler:
 
                 val_text = process_value_for_output()
 
-                # Handle multi-return assignment
+                # Multi-return assignment to existing locals. The SETLOCALs arrive
+                # in REVERSE target order (top result assigned to the last target
+                # first), so accumulate and reverse to recover the source order.
+                # (Old code emitted `c, b, a = a, f()`, which scrambled X/Y/Z and
+                # dropped the 3rd result on every multi-return coord assignment.)
                 sv = peek(0)
                 if sv.is_func_ret and sv.func_ret_count > 0:
-                    # Multi-return: accumulate names
-                    if hasattr(sv, '_accum_names'):
-                        sv._accum_names.append(name)
-                    else:
-                        sv._accum_names = [name]
+                    if not hasattr(sv, '_accum_names'):
+                        sv._accum_names = []
+                        sv._call_text = sv.text
+                    sv._accum_names.append(name)
                     sv.func_ret_count -= 1
                     if sv.func_ret_count == 0:
-                        names = ', '.join(sv._accum_names)
-                        emit(f'{names}={sv.text}')
+                        names = ', '.join(reversed(sv._accum_names))
+                        emit(f'{names}={sv._call_text}')
                         pop_val(1)
-                    else:
-                        sv.text = f'{name}, {sv.text}' if not hasattr(sv, '_orig_text') else sv._orig_text
-                        if not hasattr(sv, '_orig_text'):
-                            sv._orig_text = sv.text
-                        stack[top - 1] = sv  # update in place
                 else:
                     emit(f'{name}={val_text}')
                     pop_val(1)
@@ -1254,13 +1252,13 @@ class Decompiler:
                     pop_val(1)
                 elif sv.is_func_ret and sv.func_ret_count > 0:
                     if not hasattr(sv, '_accum_names'):
-                        sv._accum_names = [name]
-                    else:
-                        sv._accum_names.append(name)
+                        sv._accum_names = []
+                        sv._call_text = sv.text
+                    sv._accum_names.append(name)
                     sv.func_ret_count -= 1
                     if sv.func_ret_count == 0:
-                        names = ', '.join(sv._accum_names)
-                        emit(f'{names}={sv.text}')
+                        names = ', '.join(reversed(sv._accum_names))
+                        emit(f'{names}={sv._call_text}')
                         pop_val(1)
                 else:
                     val_text = process_value_for_output()

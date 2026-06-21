@@ -32,7 +32,7 @@
     "empty_if": 0,
     "parse_ok": true,
     "recompile_ok": true,
-    "diffs": 685,
+    "diffs": 432,
     "dropped_locals": 1
   },
   "gamegui": {
@@ -59,7 +59,7 @@
     "empty_if": 0,
     "parse_ok": true,
     "recompile_ok": true,
-    "diffs": 165,
+    "diffs": 132,
     "dropped_locals": 1
   },
   "intro": {
@@ -86,7 +86,7 @@
     "empty_if": 0,
     "parse_ok": true,
     "recompile_ok": true,
-    "diffs": 672,
+    "diffs": 660,
     "dropped_locals": 1
   },
   "polish": {
@@ -104,7 +104,7 @@
     "empty_if": 0,
     "parse_ok": true,
     "recompile_ok": true,
-    "diffs": 226,
+    "diffs": 46,
     "dropped_locals": 0
   },
   "russian": {
@@ -122,7 +122,7 @@
     "empty_if": 1,
     "parse_ok": true,
     "recompile_ok": true,
-    "diffs": 127,
+    "diffs": 99,
     "dropped_locals": 1
   },
   "skeleton": {
@@ -131,7 +131,7 @@
     "empty_if": 0,
     "parse_ok": true,
     "recompile_ok": true,
-    "diffs": 613,
+    "diffs": 372,
     "dropped_locals": 2
   },
   "weather": {
