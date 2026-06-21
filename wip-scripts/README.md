@@ -3,6 +3,20 @@
 Decompiled scripts with **manual fixes** for decompiler bugs, **not yet verified in-game**. Do not treat as stable
 (that's `../../ScriptsStable/`). Once a file here passes an in-game smoke test, promote it to ScriptsStable.
 
+## intro.lua — faithful + logic-fixed (TEST: does loading still hang?)
+Current-decompiler intro + the one real logic fix. The fade-out gate was decompiled wrong:
+`not not((not loadingcode)) or (loadingcode>0)` → restored to the correct **`loadingcode and (loadingcode>0)`**
+(line 235). The working 272713c version sidestepped this by *dropping* the condition entirely (`if fadeout==0 then
+fadeout=1`); this version restores the original AND logic faithfully.
+
+The remaining ~43 byte-diffs from the original are the inherent `NOT;JMPT`→`not((not X))` artifact (e.g.
+`if not((not intro["snd"]))` = `if intro["snd"]`). They're **semantically equivalent and byte-faithful** — luac4
+recompiles `not((not X))` back to `NOT;JMPT`, whereas the cleaner `if X` emits `JMPF` and diverges. So they're kept
+(ugly but correct); they can be simplified for readability later at the cost of byte-identity.
+
+**Test:** drop in, start a new game / loading sequence. Does it load past the intro without hanging? If yes, this
+replaces the 272713c special-case as the canonical intro.
+
 ## rush.lua + globals.lua — GTA-like shooting v1 (lock-on reticle) — TEST AS A PAIR
 Drop in **both** `rush.lua` and `globals.lua` together (the game loads loose `.lua` over `.luab`).
 - `globals.lua`: based on the known-working stable globals + fixes the aim bug — `GetAutoAimTarget` had `bestoy`/`bestoz`
