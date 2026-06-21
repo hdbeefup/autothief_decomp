@@ -32,8 +32,8 @@
     "empty_if": 0,
     "parse_ok": true,
     "recompile_ok": true,
-    "diffs": 430,
-    "dropped_locals": 1
+    "diffs": 163,
+    "dropped_locals": 0
   },
   "gamegui": {
     "file": "gamegui",
@@ -41,8 +41,8 @@
     "empty_if": 0,
     "parse_ok": true,
     "recompile_ok": true,
-    "diffs": 201,
-    "dropped_locals": 1
+    "diffs": 58,
+    "dropped_locals": 0
   },
   "german": {
     "file": "german",
@@ -59,8 +59,8 @@
     "empty_if": 0,
     "parse_ok": true,
     "recompile_ok": true,
-    "diffs": 132,
-    "dropped_locals": 1
+    "diffs": 16,
+    "dropped_locals": 0
   },
   "intro": {
     "file": "intro",
@@ -86,8 +86,8 @@
     "empty_if": 0,
     "parse_ok": true,
     "recompile_ok": true,
-    "diffs": 660,
-    "dropped_locals": 1
+    "diffs": 16,
+    "dropped_locals": 0
   },
   "polish": {
     "file": "polish",
@@ -122,8 +122,8 @@
     "empty_if": 1,
     "parse_ok": true,
     "recompile_ok": true,
-    "diffs": 99,
-    "dropped_locals": 1
+    "diffs": 28,
+    "dropped_locals": 0
   },
   "skeleton": {
     "file": "skeleton",
@@ -131,8 +131,8 @@
     "empty_if": 0,
     "parse_ok": true,
     "recompile_ok": true,
-    "diffs": 372,
-    "dropped_locals": 2
+    "diffs": 108,
+    "dropped_locals": 0
   },
   "weather": {
     "file": "weather",
