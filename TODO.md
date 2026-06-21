@@ -32,6 +32,9 @@ Actionable tasks. For phased context see `ROADMAP.md`; for format/animation open
 
 ## Phase 4 — native engine (background)
 - [ ] Set up `reccmp` for AutoThief.exe (recompiled PDB + address annotations).
-- [ ] Fix the **audio fade-to-silence** bug (likely OpenAL source/buffer leak in `audio.c`).
+- [~] **Audio fade-to-silence** bug — investigated (`docs/AUDIO_FADE_BUG.md`): NOT a naive leak; likely the OpenAL
+      manager update `sub_4F7560` ceasing to tick (stops GC + stream pump). NEXT (user, no code change): run
+      `alCmd("Stat")`/`alCmd("Clean")` in-game to confirm; if `Clean` restores audio, try a periodic-`Clean` Lua
+      workaround, then the native tick fix.
 - [ ] Hybrid harness (disc-check patch, proxy DLL); boot-to-window milestone.
 - [ ] Struct/offset map; vertex-to-bone binding (`docs/TODO.md`); IDA↔Ghidra audit doc.
