@@ -25,7 +25,10 @@ Actionable tasks. For phased context see `ROADMAP.md`; for format/animation open
 - [ ] Shooting/aim: fix `py1=0` flatten + `random(0,150)` Y-jitter in `rush.lua`/`globals.lua`; expose aim knobs.
 - [ ] Open-world: `config.ini` view distance / city detail / traffic density; fog.
 - [ ] DX8→DX9: d3d8to9 drop-in `d3d8.dll` + per-effect verification (EMBM, stencil shadows, env map, water, caustics).
-- [ ] Jumping (native): vertical velocity + ballistic integration + landing test vs dynamic geoms.
+- [~] Jumping (native) — SCOPED (`docs/JUMPING.md`): "glued jump" = `FUN_00527060` (globals_06.c:19411) zeroes body
+      Y velocity each frame. Fix: ballistic Y integration there + a `jump` verb in `FUN_00527c80` (vehicle.c:3878);
+      `MoveBody` is already scene-wide so landing on cars works once airborne. First confirm pbeScene gravity applies
+      to the char body (unresolved vtable from `FUN_0041da10`) + no other per-frame Y re-pin.
 
 ## Phase 3 — modding tools
 - [x] Map-editor **data layer** — `tools/city_edit.py` (list/move/setpos/delete/dup placements on byte-perfect
