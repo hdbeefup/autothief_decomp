@@ -9,18 +9,26 @@ Risk legend: 🟢 low (easily reverted value tweak) · 🟡 medium (changes feel
 
 ---
 
-## 1. Collision — "magnetic trees" + ODE LCP spam  🟢
+## 1. Collision — "magnetic trees" + ODE LCP spam  🟢 (partial) → 🟡 (native for the real fix)
 **Symptom:** cars get pulled toward/over obstacles; `stderr.txt` shows `ODE Message 3: LCP internal error, s <= 0`.
-**Where:** `globals.lua` (the engine reads these globals at ODE world setup / per step — `dWorldSetCFM/ERP/Gravity`).
+**Where:** `globals.lua` (the engine reads `CFM`/`ERP`/`G_GRAVITY` at ODE world setup / per step). Full root-cause +
+native fix in **`docs/COLLISION.md`**.
 
 | line | knob | current | try | why |
 |------|------|---------|-----|-----|
-| `globals.lua:32` | `ERP` | `0.4` | `0.2` | softer position correction → less "yank" toward obstacles |
-| `globals.lua:31` | `CFM` | `0.001` | `0.01` | more numerically forgiving → kills most LCP blow-ups |
-| `globals.lua:30` | `G_ITERATIONS` | `10` | `20`–`40` | more solver iterations → fewer LCP failures (⚠️ first confirm the engine consumes this global; check FPS cost) |
+| `globals.lua:32` | `ERP` | `0.4` | `0.2` | softer position correction → less "yank" toward obstacles (confirmed consumed) |
+| `globals.lua:31` | `CFM` | `0.001` | `0.01` | more numerically forgiving → reduces LCP stress (confirmed consumed) |
 
-**Test:** drive into a tree/lamppost; watch for the pull-in and the LCP burst in `stderr.txt`. Bisect values between runs.
-Tune one knob at a time. If pull persists after this, the fix moves to the native collision near-callback (Phase 4).
+> ⚠️ **`G_ITERATIONS` is a DEAD no-op** — the engine uses ODE's *direct* `dWorldStep`, not QuickStep, so
+> `dWorldSetQuickStepNumIterations` is never called and the global is never read. Don't bother tuning it.
+
+**The Lua tuning only softens the symptom.** Root causes are native (see `docs/COLLISION.md`): tree colliders are
+oversized *boxes*, vertical-face friction is ~0 (`mu = |n.y|·300 → 0`), no soft-CFM, and a **0.1 s max-timestep clamp**
+(`FUN_00424b10`, globals_01.c:12413) triggers the LCP error on frame hitches. The real fix is the near-callback
+`FUN_00433490` (soft-CFM + `dContactApprox1` + wall-`mu` floor + tighter depth clamp) and reducing that dt clamp.
+
+**Test:** drive into a tree/lamppost; watch for the pull-in and the LCP burst in `stderr.txt`. Bisect ERP/CFM between
+runs. If pull persists (it will, partly), it's the native near-callback (Phase 4 / `docs/COLLISION.md`).
 
 ## 2. Shooting / aim  🟡
 **Where:** `rush.lua::BulletShot` (L31) + `globals.lua::GetAutoAimTarget` (L169). Weapon stats at `rush.lua:713/725`.

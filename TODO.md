@@ -21,7 +21,10 @@ Actionable tasks. For phased context see `ROADMAP.md`; for format/animation open
       synced as a mirror, tagged `intro-baseline` (272713c).
 
 ## Phase 2 — gameplay (Lua/config first; see ROADMAP for detail)
-- [ ] Collision: tune `ERP`/`CFM`/`G_ITERATIONS` in `globals.lua` (kills "magnetic trees" + ODE LCP spam).
+- [~] Collision — SCOPED (`docs/COLLISION.md`): Lua `ERP`↓/`CFM`↑ = partial relief (`G_ITERATIONS` is a DEAD no-op).
+      Real fix is native: tree colliders are oversized boxes, walls are frictionless (`mu=|n.y|·300→0`), no soft-CFM,
+      and a `0.1s` max-dt clamp (`FUN_00424b10`, globals_01.c:12413) triggers the LCP error. Native target =
+      near-callback `FUN_00433490` (soft-CFM + `dContactApprox1` + wall-`mu` floor + depth clamp) + dt clamp.
 - [ ] Shooting/aim: fix `py1=0` flatten + `random(0,150)` Y-jitter in `rush.lua`/`globals.lua`; expose aim knobs.
 - [ ] Open-world: `config.ini` view distance / city detail / traffic density; fog.
 - [ ] DX8→DX9: d3d8to9 drop-in `d3d8.dll` + per-effect verification (EMBM, stencil shadows, env map, water, caustics).
