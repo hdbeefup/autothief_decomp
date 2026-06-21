@@ -200,10 +200,12 @@ function ShowIntro(loadingcode)
 				intro["line"]=(intro["line"] + ((dt * 15) * s));
 				if (GetComboStatus("D")>0) then
 					intro["line"]=(intro["line"] + (dt * 100));
-				else
-					skip=1;
 				end
-
+				-- NOTE: decompiler emitted `else skip=1` here, which skipped the
+				-- whole intro the instant text neared the bottom without Down held.
+				-- The original bytecode's skip=1 is jumped over (unreachable as
+				-- decompiled), so it's a structure mis-decompile. Removed so the
+				-- story scrolls; skip still works via the A button (line ~153).
 			end
 
 		end
