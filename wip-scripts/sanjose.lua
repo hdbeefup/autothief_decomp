@@ -930,7 +930,7 @@ function MissionUpdate()
 		local tx, ty, tz=GetVector(chinamafiose, "target");
 		if (GetNumber(chinamafiose, "updatemarker")==1) then
 			local roadnetwork=FindObjectByClsID(CLS_ROADNETWORK);
-			tz, ty, tx=tz, IntersectLine(roadnetwork, tx, (ty + 1000), tz, tx, (ty - 1000), tz);
+			tx, ty, tz=IntersectLine(roadnetwork, tx, (ty + 1000), tz, tx, (ty - 1000), tz);
 			SetPosition(marker, tx, (ty + 10), tz);
 			SetNumber(chinamafiose, "updatemarker", 0);
 		end
@@ -1012,7 +1012,7 @@ function gangpikap_Update(this)
 			tx=((tx * length) + px);
 			ty=0;
 			tz=((tz * length) + pz);
-			tz, ty, tx=tz, GetPointOnNetwork(roadnetwork, tx, ty, tz);
+			tx, ty, tz=GetPointOnNetwork(roadnetwork, tx, ty, tz);
 			local length=VectorLength((tx - px), 0, (tz - pz));
 			if (length<14000) then
 				local angle=-Vector2Angle((px - x), 0, (pz - z));

@@ -124,9 +124,9 @@ function CP_explode(this, cx, cy, cz, radius, power, ax, ay, az)
 		local dz=(z - cz);
 		local size=VectorLength(dx, dy, dz);
 		if (size<radius) then
-			dz, dy, dx=dz, DivVector(dx, dy, dz, size);
-			dz, dy, dx=dz, MulVector(dx, dy, dz, (power * (1 - (size / radius))));
-			dz, dy, dx=dz, AddVectors(dx, dy, dz, ax, ay, az);
+			dx, dy, dz=DivVector(dx, dy, dz, size);
+			dx, dy, dz=MulVector(dx, dy, dz, (power * (1 - (size / radius))));
+			dx, dy, dz=AddVectors(dx, dy, dz, ax, ay, az);
 			CP_accelerate(this, name, dx, dy, dz);
 		end
 
@@ -200,15 +200,15 @@ function SkeletonMovePoints(this)
 	while (id<=17) do
 		local x, y, z=GetBoneCenter(this, DefaultParticles[((id * 2) - 1)]);
 		if (id==9) then
-			z, y, x=z, GetBoneCenter(this, DefaultParticles[((id * 2) - 1)], -100, 0, 0);
+			x, y, z=GetBoneCenter(this, DefaultParticles[((id * 2) - 1)], -100, 0, 0);
 		end
 
 		if (id==10) then
-			z, y, x=z, GetBoneCenter(this, DefaultParticles[((id * 2) - 1)], 100, 0, 0);
+			x, y, z=GetBoneCenter(this, DefaultParticles[((id * 2) - 1)], 100, 0, 0);
 		end
 
 		if (id==17) then
-			z, y, x=z, GetBoneCenter(this, DefaultParticles[((id * 2) - 1)], 0, 0, -20);
+			x, y, z=GetBoneCenter(this, DefaultParticles[((id * 2) - 1)], 0, 0, -20);
 		end
 
 		local name=format("%d", id);
@@ -241,15 +241,15 @@ function InitializeSkeleton(this)
 	while (id<=17) do
 		local x, y, z=GetBoneCenter(this, DefaultParticles[((id * 2) - 1)]);
 		if (id==9) then
-			z, y, x=z, GetBoneCenter(this, DefaultParticles[((id * 2) - 1)], -30, 0, 0);
+			x, y, z=GetBoneCenter(this, DefaultParticles[((id * 2) - 1)], -30, 0, 0);
 		end
 
 		if (id==10) then
-			z, y, x=z, GetBoneCenter(this, DefaultParticles[((id * 2) - 1)], 30, 0, 0);
+			x, y, z=GetBoneCenter(this, DefaultParticles[((id * 2) - 1)], 30, 0, 0);
 		end
 
 		if (id==17) then
-			z, y, x=z, GetBoneCenter(this, DefaultParticles[((id * 2) - 1)], 0, 0, -10);
+			x, y, z=GetBoneCenter(this, DefaultParticles[((id * 2) - 1)], 0, 0, -10);
 		end
 
 		local name=format("%d", id);
@@ -490,7 +490,7 @@ function item_Update(this)
 		dy=(dy - 2);
 		SetVector(this, "accel", dx, dy, dz);
 		local touch=0;
-		collided, touch, nz, ny, nx=collided, MoveBody(30, nx, ny, nz, x, y, z, 1);
+		nx, ny, nz, touch, collided=MoveBody(30, nx, ny, nz, x, y, z, 1);
 		SetPosition(this, nx, ny, nz);
 		SetNumber(this, "collided", collided);
 	else
@@ -866,10 +866,10 @@ function character_Update(this)
 					SetNumber(hobj, "felony", felony);
 					CP_resetAcceleration(this);
 					local x, y, z=GetPosition(this);
-					hz, y, hx=hz, GetPosition(hobj);
+					hx, y, hz=GetPosition(hobj);
 					hx=(x - hx);
 					hz=(z - hz);
-					hz, hy, hx=hz, Normalize(hx, 0, hz);
+					hx, hy, hz=Normalize(hx, 0, hz);
 					hdepth=(hdepth / 100);
 					CP_accelerateAll(this, ((hx * hspeed) * 2), 700, ((hz * hspeed) * 2));
 					Scream(this, "SPLASH", 1);
@@ -1059,8 +1059,9 @@ function character_Update(this)
 					local range=random(50000, 150000);
 					local dx=(x + (sin(angle) * range));
 					local dz=(z + (cos(angle) * range));
-					local tx, ty, tz=GetPointOnNetwork(roadnetwork, dx, y, dz);
-					tz, ty, tx=tz, IntersectLine(roadnetwork, tx, (ty + 100000), tz, tx, (ty - 100000), tz);
+					local dy=y;
+					local tx, ty, tz=GetPointOnNetwork(roadnetwork, dx, dy, dz);
+					tx, ty, tz=IntersectLine(roadnetwork, tx, (ty + 100000), tz, tx, (ty - 100000), tz);
 					SetVector(this, "target", tx, ty, tz);
 					local dist=VectorLength((tx - x), 0, (tz - z));
 					local money=(dist / 600);
