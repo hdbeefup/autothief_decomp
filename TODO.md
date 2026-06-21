@@ -28,7 +28,11 @@ Actionable tasks. For phased context see `ROADMAP.md`; for format/animation open
 - [ ] Jumping (native): vertical velocity + ballistic integration + landing test vs dynamic geoms.
 
 ## Phase 3 — modding tools
-- [ ] Map editor: extend `tools/city_editor/` (picking → placement move/add/delete → save via `city_format.py`).
+- [x] Map-editor **data layer** — `tools/city_edit.py` (list/move/setpos/delete/dup placements on byte-perfect
+      `city_format.py`; selftest verifies edits touch only intended bytes). GUI-agnostic foundation.
+- [ ] Map-editor **GUI** — wire `tools/city_editor/` (pyglet viewer) to `city_edit.py`: picking → selection →
+      move/add/delete gizmo → save. (Needs interactive testing.)
+- [ ] Road-segment vertex editing (follow-up; `city_edit.py` currently covers model placements only).
 
 ## Phase 4 — native engine (background)
 - [ ] Set up `reccmp` for AutoThief.exe (recompiled PDB + address annotations).
