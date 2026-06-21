@@ -23,7 +23,7 @@
     "empty_if": 0,
     "parse_ok": true,
     "recompile_ok": true,
-    "diffs": 16,
+    "diffs": 8,
     "dropped_locals": 0
   },
   "game": {
@@ -50,7 +50,7 @@
     "empty_if": 0,
     "parse_ok": true,
     "recompile_ok": true,
-    "diffs": 62,
+    "diffs": 8,
     "dropped_locals": 0
   },
   "globals": {
@@ -95,7 +95,7 @@
     "empty_if": 0,
     "parse_ok": true,
     "recompile_ok": true,
-    "diffs": 188,
+    "diffs": 8,
     "dropped_locals": 0
   },
   "rush": {
@@ -113,7 +113,7 @@
     "empty_if": 0,
     "parse_ok": true,
     "recompile_ok": true,
-    "diffs": 272,
+    "diffs": 8,
     "dropped_locals": 0
   },
   "sanjose": {
