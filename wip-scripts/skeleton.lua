@@ -1059,7 +1059,7 @@ function character_Update(this)
 					local range=random(50000, 150000);
 					local dx=(x + (sin(angle) * range));
 					local dz=(z + (cos(angle) * range));
-					local tx, ty, tz=GetPointOnNetwork(roadnetwork, dx, dy, dz);
+					local tx, ty, tz=GetPointOnNetwork(roadnetwork, dx, y, dz);
 					tz, ty, tx=tz, IntersectLine(roadnetwork, tx, (ty + 100000), tz, tx, (ty - 100000), tz);
 					SetVector(this, "target", tx, ty, tz);
 					local dist=VectorLength((tx - x), 0, (tz - z));
