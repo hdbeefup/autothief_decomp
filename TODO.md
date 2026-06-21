@@ -62,7 +62,17 @@ Tools: `roundtrip_check.py` (harness, flags `DROP_LOCAL`), `find_dropped_locals.
       (`if not time then msg_alpha=v; msg_alpha=time; end`) → any no-`time` message set msg_alpha=nil → invisible.
       Restored the `else`. Affected EVERY no-time message. Promoted; gamegui added to deploy.sh (was loaded loose but
       never deployed by the script — an earlier session had copied a buggy one in).
-- [ ] **Chinatown escort — no enemy attacker spawns** (calm ride). CORRECTED: mission-9 MissionUpdate block is
+- [~] **Chinatown escort — attacker behaviour** — ROOT-CAUSED + FIXED (pending re-test). The gang DOES enable
+      (confirmed via diagnostics). The real bug was in `gangpikap_Update`'s respawn: the original condition is
+      `if (dist2 > 15000^2) OR ((timeout>5) and (dist2>5000^2))` (respawn-on-road when FAR/escaped or stuck), but the
+      decompiler flipped the JMPGT-to-body comparison and dropped the OR → inverted `dist2<=15000^2 and …` → the gang
+      only respawned when CLOSE, so it sat at the cemetery near the destination = "calm ride." Restored the OR; now
+      matches the user-described original (spawns behind player the moment the chinaman boards, respawns on escape/
+      destroy). ← RE-TEST. Note: this is a NEW decompiler bug class (compound-OR where an operand is a `>`/`<`
+      comparison whose success-jump enters the body) — likely more instances elsewhere; hand-patch for now.
+      Remaining sub-issue: attacker car **spins continuously** = physics (ODE LCP "disabling bodies" spam in
+      stderr.txt) — Phase-2 ODE tuning (lower ERP, raise CFM), not a Lua bug.
+- [x] ~~Chinatown — dropped block theory~~ — WRONG: mission-9 MissionUpdate block is
       **faithful** (NOT a dropped block — original also fetches `pikap` unused). The gang is activated in
       **`game.lua chinamafiose_Update` ~L1662** when the chinamafiose boards the player car
       (`Cmd(FindObject("pikap"/"shooter"/"gangpikap"),"enable 1")`). SetDriver(board)+enable are in the SAME block, so
