@@ -32,7 +32,7 @@
     "empty_if": 0,
     "parse_ok": true,
     "recompile_ok": true,
-    "diffs": 432,
+    "diffs": 430,
     "dropped_locals": 1
   },
   "gamegui": {
