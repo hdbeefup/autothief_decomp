@@ -5,7 +5,8 @@
     "empty_if": 0,
     "parse_ok": true,
     "recompile_ok": true,
-    "diffs": 2
+    "diffs": 2,
+    "dropped_locals": 0
   },
   "Materials": {
     "file": "Materials",
@@ -13,7 +14,8 @@
     "empty_if": 0,
     "parse_ok": true,
     "recompile_ok": true,
-    "diffs": 2
+    "diffs": 2,
+    "dropped_locals": 0
   },
   "english": {
     "file": "english",
@@ -21,7 +23,8 @@
     "empty_if": 0,
     "parse_ok": true,
     "recompile_ok": true,
-    "diffs": 16
+    "diffs": 16,
+    "dropped_locals": 0
   },
   "game": {
     "file": "game",
@@ -29,7 +32,8 @@
     "empty_if": 0,
     "parse_ok": true,
     "recompile_ok": true,
-    "diffs": 685
+    "diffs": 685,
+    "dropped_locals": 1
   },
   "gamegui": {
     "file": "gamegui",
@@ -37,7 +41,8 @@
     "empty_if": 0,
     "parse_ok": true,
     "recompile_ok": true,
-    "diffs": 201
+    "diffs": 201,
+    "dropped_locals": 1
   },
   "german": {
     "file": "german",
@@ -45,7 +50,8 @@
     "empty_if": 0,
     "parse_ok": true,
     "recompile_ok": true,
-    "diffs": 62
+    "diffs": 62,
+    "dropped_locals": 0
   },
   "globals": {
     "file": "globals",
@@ -53,7 +59,8 @@
     "empty_if": 0,
     "parse_ok": true,
     "recompile_ok": true,
-    "diffs": 165
+    "diffs": 165,
+    "dropped_locals": 1
   },
   "intro": {
     "file": "intro",
@@ -61,7 +68,8 @@
     "empty_if": 0,
     "parse_ok": true,
     "recompile_ok": true,
-    "diffs": 35
+    "diffs": 35,
+    "dropped_locals": 0
   },
   "menu": {
     "file": "menu",
@@ -69,7 +77,8 @@
     "empty_if": 2,
     "parse_ok": true,
     "recompile_ok": true,
-    "diffs": 98
+    "diffs": 98,
+    "dropped_locals": 0
   },
   "mimics": {
     "file": "mimics",
@@ -77,7 +86,8 @@
     "empty_if": 0,
     "parse_ok": true,
     "recompile_ok": true,
-    "diffs": 672
+    "diffs": 672,
+    "dropped_locals": 1
   },
   "polish": {
     "file": "polish",
@@ -85,7 +95,8 @@
     "empty_if": 0,
     "parse_ok": true,
     "recompile_ok": true,
-    "diffs": 188
+    "diffs": 188,
+    "dropped_locals": 0
   },
   "rush": {
     "file": "rush",
@@ -93,7 +104,8 @@
     "empty_if": 0,
     "parse_ok": true,
     "recompile_ok": true,
-    "diffs": 226
+    "diffs": 226,
+    "dropped_locals": 0
   },
   "russian": {
     "file": "russian",
@@ -101,7 +113,8 @@
     "empty_if": 0,
     "parse_ok": true,
     "recompile_ok": true,
-    "diffs": 272
+    "diffs": 272,
+    "dropped_locals": 0
   },
   "sanjose": {
     "file": "sanjose",
@@ -109,7 +122,8 @@
     "empty_if": 1,
     "parse_ok": true,
     "recompile_ok": true,
-    "diffs": 127
+    "diffs": 127,
+    "dropped_locals": 1
   },
   "skeleton": {
     "file": "skeleton",
@@ -117,7 +131,8 @@
     "empty_if": 0,
     "parse_ok": true,
     "recompile_ok": true,
-    "diffs": 613
+    "diffs": 613,
+    "dropped_locals": 2
   },
   "weather": {
     "file": "weather",
@@ -125,6 +140,7 @@
     "empty_if": 0,
     "parse_ok": true,
     "recompile_ok": true,
-    "diffs": 6
+    "diffs": 6,
+    "dropped_locals": 0
   }
 }

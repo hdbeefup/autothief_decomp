@@ -110,6 +110,22 @@ def disasm(luac: Path, luab: Path) -> str:
     return run([str(luac), "-l", "-p", str(luab)]).stdout
 
 
+_LOCALS = re.compile(r"(\d+) locals?")
+
+
+def local_counts(disasm_text: str) -> list[int]:
+    # One entry per function, in order: the "K locals" from each function header.
+    return [int(m.group(1)) for m in _LOCALS.finditer(disasm_text)]
+
+
+def dropped_locals(orig_dis: str, rc_dis: str) -> int:
+    # A function with FEWER locals after round-trip means the decompiler omitted
+    # a `local` declaration -> a local var silently became a GLOBAL, which breaks
+    # the script at runtime (the sanjose "unable to run" bug). Count such functions.
+    a, b = local_counts(orig_dis), local_counts(rc_dis)
+    return sum(1 for x, y in zip(a, b) if y < x) + (1 if len(a) != len(b) else 0)
+
+
 def check_one(name: str, decompiler: Path, luac: Path, orig_dir: Path,
               tmp: Path) -> dict:
     src_luab = orig_dir / f"{name}.luab"
@@ -131,12 +147,19 @@ def check_one(name: str, decompiler: Path, luac: Path, orig_dir: Path,
     res["recompile_ok"] = run([str(luac), "-o", str(rc), str(lua)]).returncode == 0 and rc.exists()
 
     if res["recompile_ok"]:
-        a = norm(disasm(luac, src_luab))
-        b = norm(disasm(luac, rc))
+        oa = disasm(luac, src_luab)
+        ob = disasm(luac, rc)
+        a = norm(oa)
+        b = norm(ob)
         import difflib
         res["diffs"] = sum(1 for d in difflib.ndiff(a, b) if d[:1] in "+-")
+        # dropped-local bug: a var that should be `local` became a GLOBAL. Breaks
+        # the script at runtime even though it parses + recompiles. THE bug that
+        # made sanjose unrunnable; round-trip diffs alone don't catch runnability.
+        res["dropped_locals"] = dropped_locals(oa, ob)
     else:
         res["diffs"] = None
+        res["dropped_locals"] = None
     return res
 
 
@@ -166,7 +189,8 @@ def main() -> int:
             results.append(check_one(name, args.decompiler, args.luac, args.orig, tmp))
 
     # --- report table ---
-    hdr = f"{'FILE':<14}{'DEC':>4}{'PAR':>4}{'REC':>4}{'DIFFS':>7}{'EMPTY_IF':>9}"
+    hdr = (f"{'FILE':<14}{'DEC':>4}{'PAR':>4}{'REC':>4}{'DIFFS':>7}{'EMPTY_IF':>9}"
+           f"{'DROP_LOCAL':>11}")
     print(hdr)
     print("-" * len(hdr))
     tick = lambda b: "ok" if b else "X"
@@ -174,10 +198,13 @@ def main() -> int:
         print(f"{r['file']:<14}{tick(r['decompile_ok']):>4}{tick(r.get('parse_ok')):>4}"
               f"{tick(r.get('recompile_ok')):>4}"
               f"{(r['diffs'] if r['diffs'] is not None else '-'):>7}"
-              f"{(r['empty_if'] if r['empty_if'] is not None else '-'):>9}")
+              f"{(r['empty_if'] if r['empty_if'] is not None else '-'):>9}"
+              f"{(r.get('dropped_locals') if r.get('dropped_locals') is not None else '-'):>11}")
     total_empty = sum(r["empty_if"] or 0 for r in results)
+    total_drop = sum(r.get("dropped_locals") or 0 for r in results)
     print("-" * len(hdr))
     print(f"total broken-condition (empty_if) blocks: {total_empty}")
+    print(f"total dropped-local functions (RUNTIME-BREAKING): {total_drop}")
 
     if args.json:
         args.json.write_text(json.dumps({r["file"]: r for r in results}, indent=2))
@@ -196,6 +223,8 @@ def main() -> int:
                 regressed.append(f"{r['file']}: diffs {b['diffs']} -> {r['diffs']}")
             if (r.get("empty_if") or 0) > (b.get("empty_if") or 0):
                 regressed.append(f"{r['file']}: empty_if {b.get('empty_if')} -> {r.get('empty_if')}")
+            if (r.get("dropped_locals") or 0) > (b.get("dropped_locals") or 0):
+                regressed.append(f"{r['file']}: dropped_locals {b.get('dropped_locals')} -> {r.get('dropped_locals')}")
             if b.get("parse_ok") and not r.get("parse_ok"):
                 regressed.append(f"{r['file']}: parse_ok regressed")
             if b.get("recompile_ok") and not r.get("recompile_ok"):
