@@ -62,7 +62,7 @@ Tools: `roundtrip_check.py` (harness, flags `DROP_LOCAL`), `find_dropped_locals.
       (`if not time then msg_alpha=v; msg_alpha=time; end`) → any no-`time` message set msg_alpha=nil → invisible.
       Restored the `else`. Affected EVERY no-time message. Promoted; gamegui added to deploy.sh (was loaded loose but
       never deployed by the script — an earlier session had copied a buggy one in).
-- [~] **Chinatown escort — attacker behaviour** — ROOT-CAUSED + FIXED (pending re-test). The gang DOES enable
+- [x] **Chinatown escort — attacker behaviour** — FIXED + PROMOTED (user-verified "works perfectly"). The gang DOES enable
       (confirmed via diagnostics). The real bug was in `gangpikap_Update`'s respawn: the original condition is
       `if (dist2 > 15000^2) OR ((timeout>5) and (dist2>5000^2))` (respawn-on-road when FAR/escaped or stuck), but the
       decompiler flipped the JMPGT-to-body comparison and dropped the OR → inverted `dist2<=15000^2 and …` → the gang
@@ -81,8 +81,13 @@ Tools: `roundtrip_check.py` (harness, flags `DROP_LOCAL`), `find_dropped_locals.
       game.lua+sanjose.lua, NOT promoted). NEXT: run chinatown, check `stderr.txt` for `CHINATOWN gang enabled:`
       (pikap/shooter/gangpikap >0?) and `CHINATOWN gangpikap ACTIVATED` (chase start?) → pinpoints break, then fix +
       remove prints.
+- [~] **Race-the-girl: no countdown / no opponent indicator / no destination** — FIXED (pending re-test): one root
+      cause. `game.lua rgirl_Update` dropped `local prevcounter` → `floor(prevcounter)` (nil) threw every frame and
+      aborted the whole race update, killing the countdown AND everything after it (markers, opponent arrow, FINISH).
+      Restored the local (game.lua now 0 dropped locals); promoted. Likely the same crash behind the earlier "no
+      destination marker" reports for race.
 - [ ] **No arrow on moving VEHICLE targets** (pedestrian arrows work). `game.lua:889` `AddMarker("marker\\cars",…)`
-      gated by `if (car>0)` in a race/mission-mode block — check the mode condition isn't another mis-decompile.
+      gated by `if (car>0)` — recheck after the rgirl_Update crash fix (may already be resolved).
 - [ ] **No game-over / fade on player death.** `sanjose.lua` `MissionUpdate` `mission_curid=-2` path (~L488-494).
 
 ## Original-game bugs — wishlist bugfix mods (the "labor of love")
