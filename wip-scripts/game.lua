@@ -1662,10 +1662,6 @@ function chinamafiose_Update(this)
 				Cmd(FindObject("pikap"), "enable 1");
 				Cmd(FindObject("shooter"), "enable 1");
 				Cmd(FindObject("gangpikap"), "enable 1");
-				-- DIAGNOSTIC (chinatown no-attacker bug): logs to stderr.txt whether the
-				-- gang objects exist when the chinamafiose boards. If these are all >0 but
-				-- no chase happens, the fault is in gangpikap_Update activation, not here.
-				print("CHINATOWN gang enabled: pikap=", FindObject("pikap"), " shooter=", FindObject("shooter"), " gangpikap=", FindObject("gangpikap"));
 			end
 
 		end

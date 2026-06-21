@@ -953,9 +953,8 @@ function gangpikap_Update(this)
 	if (selfcar==0) then
 		selfcar=FindObject("pikap");
 		if (GetRenderable(selfcar)==0) then
-			-- DIAGNOSTIC (chinatown): the chase can't start until the pikap is
-			-- renderable. If this never logs the line below, the enable in
-			-- game.lua chinamafiose_Update never ran (chinamafiose didn't board).
+			-- wait until the pikap is made renderable by the enable in
+			-- game.lua chinamafiose_Update (fires when the chinaman boards).
 			do return end;
 
 		end
@@ -963,7 +962,6 @@ function gangpikap_Update(this)
 		local roadnetwork=FindObjectByClsID(CLS_ROADNETWORK);
 		SetDriver(selfcar, this, roadnetwork);
 		Cmd(selfcar, "StartEngine");
-		print("CHINATOWN gangpikap ACTIVATED: driving pikap, starting chase");
 		if (LEVEL_TIME>20) or (LEVEL_TIME<9) then
 			Cmd(selfcar, "Lights 1");
 		end
@@ -1029,7 +1027,6 @@ function gangpikap_Update(this)
 			Cmd(this, "reset");
 			Cmd(selfcar, "restore");
 			Cmd(selfcar, "Lights 0");
-			print("CHINATOWN respawn: pikap -> road behind player");
 		end
 
 	end
