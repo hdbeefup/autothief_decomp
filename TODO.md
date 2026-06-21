@@ -3,6 +3,23 @@
 Durable source of truth (survives /compact, /clear, fresh sessions). For phased context see `ROADMAP.md`;
 format/animation problems in `docs/TODO.md`; decompiler status in the memory + `ScriptsStable/DECOMPILER_SOURCES.md`.
 
+## ⏯ CONTINUATION — START HERE (as of 2026-06-21)
+We are **dogfooding the decompiled Lua**: run the scripts in-game, find bugs, hand-patch in `wip-scripts/`, deploy via
+`bash wip-scripts/deploy.sh`, then promote verified files to `../ScriptsStable/`. All gameplay scripts are committed
+to ScriptsStable and deployed to `N:\GamesRE\CarJacker\Scripts\` (backup in `Scripts\_backup_wip\`).
+**The keystone fix this session:** the decompiler's reversed multi-return assignment (`c,b,a = a,f()` → scrambled
+coordinates) — fixed in `lua4dec.py`; that alone repaired shooting, melee, AI driving, taxi, and more.
+**WORKING in-game now:** intro (story + auto-advance), markers, taxi, shooting/melee, AI driving, luxury-car mission.
+**NEXT (open in-game bugs, hardest first):**
+1. Chinatown escort (mission 9, sanjose `MissionUpdate` ~L900): enemy attacker never spawns/enables — likely a
+   DROPPED CODE BLOCK (the `pikap` is fetched at L906 but unused). Reconstruct mission 9 vs original bytecode.
+2. Mission-FAILED gui not appearing (sanjose uses `message2(1.5, MISSIONFAILED)` — check `message2` in gamegui.lua
+   and the MISSIONFAILED display path; mission-COMPLETE was fixed via the intro auto-advance, FAILED is separate).
+3. Vehicle-target arrow (game.lua:889 mode gate); game-over fade on death (sanjose mission_curid=-2 path).
+4. Wishlist bugfix-mods: #17 jack ghost-driver, #18 camera→0,0, #19 run/sprint (hold shift).
+Tools: `roundtrip_check.py` (harness, DROP_LOCAL/empty_if), `find_dropped_locals.py <luab>`. Hand-patch > decompiler
+change for most of these (decompiler perfection deferred per user until after the exe decomp matures).
+
 ## Dogfooding loop (how we work on the Lua)
 `ScriptsStable/` = "stable ENOUGH to iterate from" (NOT known-perfect). We run the decompiled scripts in-game, find
 bugs, hand-patch, re-test. Loop:
